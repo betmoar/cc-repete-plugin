@@ -44,6 +44,63 @@ set_fm() { # key value  (atomic update of a key ONLY within the first frontmatte
 
 emit() { jq -n --arg m "$1" '{systemMessage:$m}'; }
 
+# ---- lesson catalog helpers ----------------------------------------------
+# Read one frontmatter value from a lesson card. The card template carries a
+# leading <!-- ... --> comment BEFORE its '---' block, so key off the first
+# '---'-delimited block (f==1), exactly as the state-file reader does.
+card_field() { # file key
+  # Strip the "key: " prefix, then any trailing " # comment" (the shipped
+  # lesson-card template carries inline comments on its frontmatter lines —
+  # e.g. `severity: high   # how badly it bit`), then trim surrounding space.
+  # Without the comment-strip a filled card's severity becomes "high  # …",
+  # which fails the case match in build_catalog and silently drops the card.
+  awk -v k="$2" '
+    BEGIN{f=0}
+    /^---[[:space:]]*$/{f++; next}
+    f==1 && index($0, k":")==1 {
+      sub("^"k":[[:space:]]*","")
+      sub(/[[:space:]]*#.*$/,"")
+      gsub(/^[[:space:]]+|[[:space:]]+$/,"")
+      print; exit
+    }
+    f>=2{exit}
+  ' "$1"
+}
+
+# Build a metadata-only catalog: one line per valid card, ranked severity
+# (high>medium>low) then hits (desc), capped, with an overflow note. Robust:
+# any card missing slug or a recognized severity is skipped silently, never
+# crashing the builder or emitting a garbled line (spec §5 parser robustness).
+build_catalog() { # cap
+  local cap="$1" dir="$REPETE_DIR/lessons"
+  [[ -d "$dir" ]] || return 0
+  local f slug sev hits tags rank rows="" total=0
+  for f in "$dir"/*.md; do
+    [[ -e "$f" ]] || continue
+    [[ "$(basename "$f")" == "_TEMPLATE.md" ]] && continue
+    slug="$(card_field "$f" slug)"
+    sev="$(card_field "$f" severity)"
+    [[ -n "$slug" && -n "$sev" ]] || continue
+    case "$sev" in
+      high) rank=0 ;; medium) rank=1 ;; low) rank=2 ;;
+      *) continue ;;
+    esac
+    hits="$(card_field "$f" hits)"; [[ "$hits" =~ ^[0-9]+$ ]] || hits=1
+    tags="$(card_field "$f" tags | tr -d '[] ')"
+    rows+="$(printf '%d\t%09d\t%s\t%s\t%s\t%s' "$rank" "$((999999999 - hits))" "$slug" "$tags" "$sev" "$hits")"$'\n'
+    total=$((total + 1))
+  done
+  [[ "$total" -gt 0 ]] || return 0
+  local shown="$total"
+  [[ "$cap" -gt 0 ]] && shown="$cap"
+  printf 'Known lessons (consult before acting; Read only the relevant ones):\n'
+  printf '%s' "$rows" | sort -t$'\t' -k1,1n -k2,2n | head -n "$shown" \
+    | awk -F'\t' '{printf "  %-22s [%s] %-6s hits:%s\n", $3, $4, $5, $6}'
+  if [[ "$cap" -gt 0 && "$total" -gt "$cap" ]]; then
+    printf '  … +%d more — grep .repete/lessons/\n' "$((total - cap))"
+  fi
+}
+
 ACTIVE="$(fm active)"
 [[ "$ACTIVE" == "true" ]] || exit 0
 
@@ -134,6 +191,10 @@ set_fm iteration "$NEXT"
 # rule inside the body is preserved, not swallowed (I1).
 PAYLOAD_BODY="$(awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$STATE_FILE")"
 
+# --- lessons catalog (metadata only; bodies are agent-retrieved on demand) -
+CATALOG_CAP="$(fm lesson_catalog_cap)"; [[ "$CATALOG_CAP" =~ ^[0-9]+$ ]] || CATALOG_CAP=8
+CATALOG="$(build_catalog "$CATALOG_CAP")"
+
 # --- engine protocol (frozen, hook-versioned) -----------------------------
 # Read the shipped protocol template; fall back to an inline core if it is
 # unreadable (missing/botched install). Fail-functional: the loop must never
@@ -150,6 +211,7 @@ PROTO="${PROTO//'${NEXT}'/$NEXT}"
 
 # --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
 REINJECT="$PAYLOAD_BODY"
+[[ -n "$CATALOG" ]] && REINJECT+=$'\n\n'"$CATALOG"
 REINJECT+=$'\n'"$PROTO"
 
 jq -n --arg r "$REINJECT" --arg m "🔄 repete · phase ${PHASE} · iteration ${NEXT}" \

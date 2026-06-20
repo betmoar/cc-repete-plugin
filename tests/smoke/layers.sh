@@ -28,4 +28,59 @@ echo "$OUT" | jq -e '.reason | contains("files")' >/dev/null 2>&1; assert "fallb
 # the inline fallback path, not the old heredoc. (B3: keeps the red step red.)
 echo "$OUT" | jq -e '.reason | contains("MISSION goal in .repete/MISSION.md is verifiably TRUE")' >/dev/null 2>&1; assert "fallback uses its distinctive phrasing (not v1 heredoc)" $?
 
+echo "== L3: catalog ranks by severity then hits, excludes template + malformed =="
+D="$ROOT/l3"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+mkcard "$D" "001-low-old"   "hook,shell"  low    1
+mkcard "$D" "003-high-hot"  "jest,esm"    high   4
+mkcard "$D" "007-med-two"   "async,test"  medium 2
+# malformed: missing severity -> must be skipped
+cat > "$D/.repete/lessons/099-broken.md" <<'EOF'
+---
+slug: 099-broken
+tags: [x]
+hits: 9
+---
+no severity here
+EOF
+# _TEMPLATE.md must be excluded
+cp "$D/.repete/lessons/001-low-old.md" "$D/.repete/lessons/_TEMPLATE.md"
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("Known lessons")' >/dev/null 2>&1; assert "catalog header present" $?
+echo "$OUT" | jq -e '.reason | contains("003-high-hot")' >/dev/null 2>&1; assert "high card present" $?
+echo "$OUT" | jq -e '.reason | contains("099-broken") | not' >/dev/null 2>&1; assert "malformed card excluded" $?
+echo "$OUT" | jq -e '.reason | contains("_TEMPLATE") | not' >/dev/null 2>&1; assert "template excluded" $?
+# ordering: high appears before medium appears before low
+echo "$OUT" | jq -r '.reason' | awk '/003-high-hot/{h=NR} /007-med-two/{m=NR} /001-low-old/{l=NR} END{exit !(h<m && m<l)}'; assert "ranked high<medium<low" $?
+# no card body prose leaks
+echo "$OUT" | jq -e '.reason | contains("do the thing") | not' >/dev/null 2>&1; assert "no card body in re-inject" $?
+# no inline frontmatter-comment text leaks (B1: card_field must strip trailing #...)
+echo "$OUT" | jq -e '.reason | contains("used to decide") | not' >/dev/null 2>&1; assert "no inline # comment leaked from tags line" $?
+echo "$OUT" | jq -e '.reason | contains("how badly it bit") | not' >/dev/null 2>&1; assert "no inline # comment leaked from severity line" $?
+# the commented high card (003) must still be ranked top despite its inline comment
+echo "$OUT" | jq -r '.reason' | awk '/003-high-hot/{print; exit}' | grep -q 'high'; assert "commented card parsed (severity survived strip)" $?
+
+echo "== L4: cap caps the catalog and emits overflow note =="
+D="$ROOT/l4"; mkstate "$D" running true 1 0 2 '"g"' '"s"'   # ctx budget unused here
+# override cap to 2 via frontmatter
+perl -0777 -pi -e 's/lesson_catalog_cap: 8/lesson_catalog_cap: 2/' "$D/.repete/loop.local.md"
+mkcard "$D" "a-high" "t" high 5
+mkcard "$D" "b-high" "t" high 4
+mkcard "$D" "c-high" "t" high 3
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("+1 more")' >/dev/null 2>&1; assert "overflow note for 3 cards cap 2" $?
+# exactly 2 card lines shown. Count real catalog rows (two-space indent, a slug,
+# then the "[tags]" field) and exclude the "… +N more" overflow line. Decoupled
+# from %-Ns padding width and from the specific slug names (B4).
+[[ "$(echo "$OUT" | jq -r '.reason' | grep -E '^  [^ ].*\[' | grep -vc 'more —')" -eq 2 ]]; assert "exactly cap (2) cards shown" $?
+
+echo "== L5: no lessons dir / empty -> no catalog, loop still continues =="
+D="$ROOT/l5"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+rm -rf "$D/.repete/lessons"
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1; assert "no lessons dir -> still blocks" $?
+echo "$OUT" | jq -e '.reason | contains("Known lessons") | not' >/dev/null 2>&1; assert "no catalog header when no cards" $?
+
 summary
