@@ -92,9 +92,9 @@ Each iteration's re-inject is assembled from four layers, in this order:
    context-rot source the catalog eliminates. (Card *count* stays decoupled from
    re-inject *size*.)
 3. **User constitution** — `.repete/constitution.md`, your frozen project invariants
-   (don't-touch dirs, "keep the public API stable", conventions). Injected verbatim
-   only if it has real content — an unfilled comments-only starter is skipped, so it
-   isn't pure bloat.
+   (don't-touch dirs, "keep the public API stable", conventions). Injected with HTML
+   comments stripped, only if it has real content — an unfilled comments-only starter
+   is skipped, so it isn't pure bloat.
 4. **Engine protocol** — `templates/protocol.md`, the loop's standing rules (work from
    files, emit sentinels only when honest). Hook-owned, always injected **last** so the
    binding rules aren't buried under the payload. Falls back to an inline core if the

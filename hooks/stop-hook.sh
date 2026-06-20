@@ -232,7 +232,11 @@ PROTO_FALLBACK='
 - Work from files and git, not from memory in this conversation.
 - When THIS loop'"'"'s exit goal is satisfied (and only then): output a <repete-checkpoint>...</repete-checkpoint> block with your proposed next-loop payload, then stop.
 - Only when the MISSION goal in .repete/MISSION.md is verifiably TRUE: output <repete-done> with that exact goal string </repete-done>. Never emit either sentinel just to escape the loop.'
-PROTO="$(cat "${CLAUDE_PLUGIN_ROOT:-}/templates/protocol.md" 2>/dev/null)"
+# Only attempt the read when CLAUDE_PLUGIN_ROOT is set; otherwise the
+# expansion falls to a filesystem-root "/templates/protocol.md" that could
+# read an unrelated file and silently mask the fallback.
+PROTO=""
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && PROTO="$(cat "${CLAUDE_PLUGIN_ROOT}/templates/protocol.md" 2>/dev/null)"
 [[ -n "$PROTO" ]] || PROTO="$PROTO_FALLBACK"
 PROTO="${PROTO//'${PHASE}'/$PHASE}"
 PROTO="${PROTO//'${NEXT}'/$NEXT}"
