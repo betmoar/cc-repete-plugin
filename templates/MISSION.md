@@ -24,4 +24,5 @@ GOAL: <one-line, verifiable completion statement>
 
 ## Constraints
 
-- <hard rules: don't touch dir X, don't push, keep API shape stable, etc.>
+Hard invariants live in `.repete/constitution.md` (single source — re-injected into
+the loop each iteration). Edit that file, not this section.

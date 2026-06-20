@@ -195,6 +195,33 @@ PAYLOAD_BODY="$(awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$STATE_FIL
 CATALOG_CAP="$(fm lesson_catalog_cap)"; [[ "$CATALOG_CAP" =~ ^[0-9]+$ ]] || CATALOG_CAP=8
 CATALOG="$(build_catalog "$CATALOG_CAP")"
 
+# --- user constitution (frozen, user-authored) ----------------------------
+# Inject verbatim ONLY if it has real content. An unfilled starter is all HTML
+# comments + blanks; injecting that every iteration is pure bloat, so treat
+# "comments-and-whitespace only" as empty and skip (extends spec §7 "empty ->
+# skip" to "effectively-empty -> skip").
+CONSTITUTION=""
+CONST_FILE="$REPETE_DIR/constitution.md"
+if [[ -f "$CONST_FILE" ]]; then
+  CONST_RAW="$(cat "$CONST_FILE" 2>/dev/null)"
+  # Strip <!-- ... --> comment blocks (keep everything else). The stripped text is
+  # what gets injected — comment noise must not ride every re-inject (spec §7
+  # "stay short"). This is stricter-but-aligned with the spec's "verbatim": we
+  # inject the user's real rules, minus HTML comments.
+  CONST_NOCOMMENT="$(printf '%s' "$CONST_RAW" | perl -0777 -pe 's/<!--.*?-->//gs')"
+  # Emptiness test: also drop blank lines; if nothing real remains, skip entirely
+  # (an unfilled all-comments starter -> empty -> not injected).
+  CONST_REAL="$(printf '%s' "$CONST_NOCOMMENT" | grep -v '^[[:space:]]*$' || true)"
+  if [[ -n "$CONST_REAL" ]]; then
+    # Trim leading + trailing blank lines (a stripped comment block leaves gaps),
+    # but keep blank lines BETWEEN rules. Portable: no tac/tail -r (macOS lacks tac).
+    # awk #1 drops leading blanks; awk #2 buffers and prints up to the last non-blank.
+    CONSTITUTION="$(printf '%s' "$CONST_NOCOMMENT" \
+      | awk 'NF{p=1} p' \
+      | awk '{a[NR]=$0} END{last=NR; while(last>0 && a[last]~/^[[:space:]]*$/)last--; for(i=1;i<=last;i++)print a[i]}')"
+  fi
+fi
+
 # --- engine protocol (frozen, hook-versioned) -----------------------------
 # Read the shipped protocol template; fall back to an inline core if it is
 # unreadable (missing/botched install). Fail-functional: the loop must never
@@ -212,6 +239,7 @@ PROTO="${PROTO//'${NEXT}'/$NEXT}"
 # --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
 REINJECT="$PAYLOAD_BODY"
 [[ -n "$CATALOG" ]] && REINJECT+=$'\n\n'"$CATALOG"
+[[ -n "$CONSTITUTION" ]] && REINJECT+=$'\n\n--- project invariants (.repete/constitution.md) ---\n'"$CONSTITUTION"
 REINJECT+=$'\n'"$PROTO"
 
 jq -n --arg r "$REINJECT" --arg m "🔄 repete · phase ${PHASE} · iteration ${NEXT}" \

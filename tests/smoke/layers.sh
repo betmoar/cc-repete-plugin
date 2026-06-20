@@ -83,4 +83,48 @@ runhook "$D" "$D/tr.jsonl" "s"
 echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1; assert "no lessons dir -> still blocks" $?
 echo "$OUT" | jq -e '.reason | contains("Known lessons") | not' >/dev/null 2>&1; assert "no catalog header when no cards" $?
 
+echo "== L6: real constitution injected before protocol, after catalog; comments stripped =="
+D="$ROOT/l6"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+cat > "$D/.repete/constitution.md" <<'EOF'
+<!-- editing note the agent must never see -->
+Do not touch the db/ directory.
+Always run: make test
+EOF
+mkcard "$D" "001-x" "t" high 1
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("Do not touch the db/ directory")' >/dev/null 2>&1; assert "constitution content injected" $?
+echo "$OUT" | jq -e '.reason | contains("editing note the agent must never see") | not' >/dev/null 2>&1; assert "HTML comment stripped from injected constitution (S3)" $?
+# order: catalog (Known lessons) before constitution before protocol (standing rules)
+echo "$OUT" | jq -r '.reason' | awk '/Known lessons/{c=NR} /Do not touch the db/{k=NR} /repete standing rules/{p=NR} END{exit !(c<k && k<p)}'; assert "order catalog<constitution<protocol" $?
+
+echo "== L7: comment-only / empty constitution is skipped (no bloat) =="
+D="$ROOT/l7"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+cat > "$D/.repete/constitution.md" <<'EOF'
+<!--
+  Starter. Fill in your project's hard invariants below.
+-->
+
+EOF
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("project invariants") | not' >/dev/null 2>&1; assert "comment-only constitution skipped" $?
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1; assert "loop still continues" $?
+
+echo "== L8: missing constitution is skipped silently =="
+D="$ROOT/l8"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("project invariants") | not' >/dev/null 2>&1; assert "absent constitution -> no header" $?
+
+echo "== L8b: catalog is rebuilt FRESH each Stop — a card added between Stops appears (spec §5) =="
+D="$ROOT/l8b"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+mkcard "$D" "001-first" "t" high 1
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("002-added") | not' >/dev/null 2>&1; assert "card not yet present before it exists" $?
+mkcard "$D" "002-added" "t" high 2          # add a card between Stops
+runhook "$D" "$D/tr.jsonl" "s"               # second Stop, same fixture
+echo "$OUT" | jq -e '.reason | contains("002-added")' >/dev/null 2>&1; assert "newly-added card appears in next catalog (fresh build)" $?
+
 summary
