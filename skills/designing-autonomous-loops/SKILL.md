@@ -8,7 +8,6 @@ description: >-
   unattended run, a ralph loop, set-and-forget agents, or how to keep a long agent run from
   degrading — even if they don't name a specific tool. Reach for this before architecting a
   loop, so the choice is grounded in how context rot actually behaves rather than vibes.
-compatibility: Conceptual guidance; pairs with the running-repete-loops skill for operating cc-repete specifically.
 ---
 
 # Designing autonomous loops

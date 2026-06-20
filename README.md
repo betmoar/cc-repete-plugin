@@ -79,13 +79,31 @@ The agent ends a unit of work by emitting one of:
 The standing rules injected each iteration forbid emitting either sentinel just to escape —
 the same honesty contract the Ralph loop relies on.
 
-## Learning (v1)
+## Memory layers — what gets re-injected
+
+Each iteration's re-inject is assembled from four layers, in this order:
+
+1. **Evolving brief** — the body of `loop.local.md`: this loop's exit goal + working
+   brief. Changes at every checkpoint.
+2. **Lessons catalog** — *metadata only*: one line per lesson card
+   (slug · tags · severity · hits), ranked by severity then hits, capped (default 8).
+   The card **bodies** are never injected — the agent `Read`s only the relevant card
+   on demand. This is deliberate: pasting card bodies every iteration is the exact
+   context-rot source the catalog eliminates. (Card *count* stays decoupled from
+   re-inject *size*.)
+3. **User constitution** — `.repete/constitution.md`, your frozen project invariants
+   (don't-touch dirs, "keep the public API stable", conventions). Injected verbatim
+   only if it has real content — an unfilled comments-only starter is skipped, so it
+   isn't pure bloat.
+4. **Engine protocol** — `templates/protocol.md`, the loop's standing rules (work from
+   files, emit sentinels only when honest). Hook-owned, always injected **last** so the
+   binding rules aren't buried under the payload. Falls back to an inline core if the
+   template is unreadable (fail-functional — never lose the two sentinels).
 
 When the agent hits a dead-end or a fix that didn't work, it writes a **lesson card** to
 `.repete/lessons/` (see `templates/lesson-card.md`): situation → tried → outcome → rule,
-tagged for retrieval. At each transition the relevant cards are pulled into the next loop's
-**Known traps** section, so the loop starts forewarned. Cards are project-local in v1;
-recurrence-gated promotion to a global `~/.claude/repete/` store is the v3 design.
+tagged for retrieval. Cards are project-local in v1; recurrence-gated promotion to a
+global `~/.claude/repete/` store is the v3 design.
 
 ## Requirements
 
