@@ -45,3 +45,6 @@ temp/
 *.claude-session
 .remember
 .repete/
+
+# Skill-development scratch (eval logs, trigger sets, results.json)
+skills-workspace/

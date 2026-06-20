@@ -9,7 +9,7 @@ lesson library, and **fights context rot** by turning a transcript-size budget i
 `/clear` + rehydrate checkpoint. It reuses the [`remember`](https://github.com/anthropics/claude-code)
 plugin for tiered memory rather than reinventing it.
 
-This is **v1** — a single evolving loop with project-local lessons. Multi-phase mission
+This is **v0.1.1** — a single evolving loop with project-local lessons. Multi-phase mission
 chaining (v2) and cross-project global learning (v3) build on the same state model.
 
 ## How it works
@@ -42,6 +42,20 @@ drift and bad decisions compound.
 | `/repete-status`   | Read-only view of phase, iteration, goal, pending TODOs, lessons   |
 | `/repete-cancel`   | Deactivate the loop (state preserved for review)                   |
 
+## Skills
+
+The plugin bundles two skills (auto-discovered, no install step) that carry the
+operational and design judgment, so the commands stay terse:
+
+- **running-repete-loops** — *operate* a repete loop well: writing a verifiable
+  mission goal, the four memory layers (what goes where), authoring lesson cards,
+  reading the checkpoint/budget states, sane defaults. Reach for it whenever you
+  start, resume, or debug a run.
+- **designing-autonomous-loops** — *decide* whether and how to loop at all:
+  single-session re-inject vs. fresh-process vs. one-shot, and how to fight
+  context rot with memory layering. Grounded in measured rot findings. Reach for
+  it when weighing "should I loop this" or architecting a long run.
+
 ## State layout (`.repete/`, per project, git-ignored)
 
 ```
@@ -65,13 +79,31 @@ The agent ends a unit of work by emitting one of:
 The standing rules injected each iteration forbid emitting either sentinel just to escape —
 the same honesty contract the Ralph loop relies on.
 
-## Learning (v1)
+## Memory layers — what gets re-injected
+
+Each iteration's re-inject is assembled from four layers, in this order:
+
+1. **Evolving brief** — the body of `loop.local.md`: this loop's exit goal + working
+   brief. Changes at every checkpoint.
+2. **Lessons catalog** — *metadata only*: one line per lesson card
+   (slug · tags · severity · hits), ranked by severity then hits, capped (default 8).
+   The card **bodies** are never injected — the agent `Read`s only the relevant card
+   on demand. This is deliberate: pasting card bodies every iteration is the exact
+   context-rot source the catalog eliminates. (Card *count* stays decoupled from
+   re-inject *size*.)
+3. **User constitution** — `.repete/constitution.md`, your frozen project invariants
+   (don't-touch dirs, "keep the public API stable", conventions). Injected with HTML
+   comments stripped, only if it has real content — an unfilled comments-only starter
+   is skipped, so it isn't pure bloat.
+4. **Engine protocol** — `templates/protocol.md`, the loop's standing rules (work from
+   files, emit sentinels only when honest). Hook-owned, always injected **last** so the
+   binding rules aren't buried under the payload. Falls back to an inline core if the
+   template is unreadable (fail-functional — never lose the two sentinels).
 
 When the agent hits a dead-end or a fix that didn't work, it writes a **lesson card** to
 `.repete/lessons/` (see `templates/lesson-card.md`): situation → tried → outcome → rule,
-tagged for retrieval. At each transition the relevant cards are pulled into the next loop's
-**Known traps** section, so the loop starts forewarned. Cards are project-local in v1;
-recurrence-gated promotion to a global `~/.claude/repete/` store is the v3 design.
+tagged for retrieval. Cards are project-local in v1; recurrence-gated promotion to a
+global `~/.claude/repete/` store is the v3 design.
 
 ## Requirements
 

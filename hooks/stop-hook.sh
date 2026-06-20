@@ -44,6 +44,64 @@ set_fm() { # key value  (atomic update of a key ONLY within the first frontmatte
 
 emit() { jq -n --arg m "$1" '{systemMessage:$m}'; }
 
+# ---- lesson catalog helpers ----------------------------------------------
+# Read one frontmatter value from a lesson card. The card template carries a
+# leading <!-- ... --> comment BEFORE its '---' block, so key off the first
+# '---'-delimited block (f==1), exactly as the state-file reader does.
+card_field() { # file key
+  # Strip the "key: " prefix, then any trailing " # comment" (the shipped
+  # lesson-card template carries inline comments on its frontmatter lines —
+  # e.g. `severity: high   # how badly it bit`), then trim surrounding space.
+  # Without the comment-strip a filled card's severity becomes "high  # …",
+  # which fails the case match in build_catalog and silently drops the card.
+  awk -v k="$2" '
+    BEGIN{f=0}
+    /^---[[:space:]]*$/{f++; next}
+    f==1 && index($0, k":")==1 {
+      sub("^"k":[[:space:]]*","")
+      sub(/[[:space:]]+#.*$/,"")
+      gsub(/^[[:space:]]+|[[:space:]]+$/,"")
+      print; exit
+    }
+    f>=2{exit}
+  ' "$1"
+}
+
+# Build a metadata-only catalog: one line per valid card, ranked severity
+# (high>medium>low) then hits (desc), capped, with an overflow note. Robust:
+# any card missing slug or a recognized severity is skipped silently, never
+# crashing the builder or emitting a garbled line (spec §5 parser robustness).
+build_catalog() { # cap
+  local cap="$1" dir="$REPETE_DIR/lessons"
+  [[ -d "$dir" ]] || return 0
+  local f slug sev hits tags rank rows="" total=0
+  for f in "$dir"/*.md; do
+    [[ -e "$f" ]] || continue
+    [[ "$(basename "$f")" == "_TEMPLATE.md" ]] && continue
+    slug="$(card_field "$f" slug)"
+    sev="$(card_field "$f" severity)"
+    [[ -n "$slug" && -n "$sev" ]] || continue
+    case "$sev" in
+      high) rank=0 ;; medium) rank=1 ;; low) rank=2 ;;
+      *) continue ;;
+    esac
+    hits="$(card_field "$f" hits)"; [[ "$hits" =~ ^[0-9]+$ ]] || hits=1
+    hits=$((10#$hits))   # force base-10: a leading-zero hits (08/09) is decimal, not octal
+    tags="$(card_field "$f" tags | tr -d '[] ')"
+    rows+="$(printf '%d\t%09d\t%s\t%s\t%s\t%s' "$rank" "$((999999999 - hits))" "$slug" "$tags" "$sev" "$hits")"$'\n'
+    total=$((total + 1))
+  done
+  [[ "$total" -gt 0 ]] || return 0
+  local shown="$total"
+  [[ "$cap" -gt 0 ]] && shown="$cap"
+  printf 'Known lessons (consult before acting; Read only the relevant ones):\n'
+  printf '%s' "$rows" | sort -t$'\t' -k1,1n -k2,2n | head -n "$shown" \
+    | awk -F'\t' '{printf "  %-22s [%s] %-6s hits:%s\n", $3, $4, $5, $6}'
+  if [[ "$cap" -gt 0 && "$total" -gt "$cap" ]]; then
+    printf '  … +%d more — grep .repete/lessons/\n' "$((total - cap))"
+  fi
+}
+
 ACTIVE="$(fm active)"
 [[ "$ACTIVE" == "true" ]] || exit 0
 
@@ -91,7 +149,7 @@ printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'exit(/<repete-checkpoint>.*?<\/repe
 if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]]; then
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
   if [[ -n "$DONE" && "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
-    set_fm status done
+    set_fm status "done"
     set_fm active false
     emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
     exit 0
@@ -134,18 +192,60 @@ set_fm iteration "$NEXT"
 # rule inside the body is preserved, not swallowed (I1).
 PAYLOAD_BODY="$(awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$STATE_FILE")"
 
-RULES="$(cat <<EOF
+# --- lessons catalog (metadata only; bodies are agent-retrieved on demand) -
+CATALOG_CAP="$(fm lesson_catalog_cap)"; [[ "$CATALOG_CAP" =~ ^[0-9]+$ ]] || CATALOG_CAP=8
+CATALOG="$(build_catalog "$CATALOG_CAP")"
 
+# --- user constitution (frozen, user-authored) ----------------------------
+# Inject verbatim ONLY if it has real content. An unfilled starter is all HTML
+# comments + blanks; injecting that every iteration is pure bloat, so treat
+# "comments-and-whitespace only" as empty and skip (extends spec §7 "empty ->
+# skip" to "effectively-empty -> skip").
+CONSTITUTION=""
+CONST_FILE="$REPETE_DIR/constitution.md"
+if [[ -f "$CONST_FILE" ]]; then
+  CONST_RAW="$(cat "$CONST_FILE" 2>/dev/null)"
+  # Strip <!-- ... --> comment blocks (keep everything else). The stripped text is
+  # what gets injected — comment noise must not ride every re-inject (spec §7
+  # "stay short"). This is stricter-but-aligned with the spec's "verbatim": we
+  # inject the user's real rules, minus HTML comments.
+  CONST_NOCOMMENT="$(printf '%s' "$CONST_RAW" | perl -0777 -pe 's/<!--.*?-->//gs')"
+  # Emptiness test: also drop blank lines; if nothing real remains, skip entirely
+  # (an unfilled all-comments starter -> empty -> not injected).
+  CONST_REAL="$(printf '%s' "$CONST_NOCOMMENT" | grep -v '^[[:space:]]*$' || true)"
+  if [[ -n "$CONST_REAL" ]]; then
+    # Trim leading + trailing blank lines (a stripped comment block leaves gaps),
+    # but keep blank lines BETWEEN rules. Portable: no tac/tail -r (macOS lacks tac).
+    # awk #1 drops leading blanks; awk #2 buffers and prints up to the last non-blank.
+    CONSTITUTION="$(printf '%s' "$CONST_NOCOMMENT" \
+      | awk 'NF{p=1} p' \
+      | awk '{a[NR]=$0} END{last=NR; while(last>0 && a[last]~/^[[:space:]]*$/)last--; for(i=1;i<=last;i++)print a[i]}')"
+  fi
+fi
+
+# --- engine protocol (frozen, hook-versioned) -----------------------------
+# Read the shipped protocol template; fall back to an inline core if it is
+# unreadable (missing/botched install). Fail-functional: the loop must never
+# lose its two sentinels, matching the fail-open-on-missing-jq philosophy.
+PROTO_FALLBACK='
 --- repete standing rules (phase ${PHASE} · iteration ${NEXT}) ---
-- Re-read .repete/MISSION.md, .repete/todo-next.md and the cards in .repete/lessons/ BEFORE acting. Work from files and git, not from memory in this conversation.
-- The moment you notice work outside this loop's exit goal, append it to .repete/todo-next.md (one line: what + why + where). Do not chase it now.
-- When you hit a mistake, dead-end, or a fix that did not work, write a lesson card to .repete/lessons/ in the format the template defines. Reflect briefly: what you tried, what happened, the rule for next time.
-- When THIS loop's exit goal is satisfied (and only then): output a <repete-checkpoint>...</repete-checkpoint> block containing your proposed next-loop payload — seeded from .repete/todo-next.md and what you learned — then stop. The user approves it before the next loop starts.
-- Only when the MISSION goal stated in .repete/MISSION.md is unequivocally and verifiably TRUE: output <repete-done> with that exact goal string </repete-done>. Never emit either sentinel just to escape the loop.
-EOF
-)"
+- Work from files and git, not from memory in this conversation.
+- When THIS loop'"'"'s exit goal is satisfied (and only then): output a <repete-checkpoint>...</repete-checkpoint> block with your proposed next-loop payload, then stop.
+- Only when the MISSION goal in .repete/MISSION.md is verifiably TRUE: output <repete-done> with that exact goal string </repete-done>. Never emit either sentinel just to escape the loop.'
+# Only attempt the read when CLAUDE_PLUGIN_ROOT is set; otherwise the
+# expansion falls to a filesystem-root "/templates/protocol.md" that could
+# read an unrelated file and silently mask the fallback.
+PROTO=""
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && PROTO="$(cat "${CLAUDE_PLUGIN_ROOT}/templates/protocol.md" 2>/dev/null)"
+[[ -n "$PROTO" ]] || PROTO="$PROTO_FALLBACK"
+PROTO="${PROTO//'${PHASE}'/$PHASE}"
+PROTO="${PROTO//'${NEXT}'/$NEXT}"
 
-REINJECT="$PAYLOAD_BODY$RULES"
+# --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
+REINJECT="$PAYLOAD_BODY"
+[[ -n "$CATALOG" ]] && REINJECT+=$'\n\n'"$CATALOG"
+[[ -n "$CONSTITUTION" ]] && REINJECT+=$'\n\n--- project invariants (.repete/constitution.md) ---\n'"$CONSTITUTION"
+REINJECT+=$'\n'"$PROTO"
 
 jq -n --arg r "$REINJECT" --arg m "🔄 repete · phase ${PHASE} · iteration ${NEXT}" \
   '{decision:"block", reason:$r, systemMessage:$m}'

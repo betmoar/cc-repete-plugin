@@ -45,12 +45,21 @@ Create, in the project root:
     leave `""` — the hook will simply skip the isolation check).
   - `mission_goal`: the EXACT goal string, identical to `GOAL:` in MISSION.md.
   - `max_iterations`, `context_budget_lines`: as agreed.
+  - `lesson_catalog_cap`: max lesson lines surfaced in the catalog each iteration
+    (default 8; 0 = uncapped — only for small projects).
   - `started_at`: output of `date -u +%Y-%m-%dT%H:%M:%SZ`.
   - `status: running`, `active: true`, `phase: 1`, `iteration: 1`.
   Fill the body with this loop's exit goal + working brief.
 - `.repete/todo-next.md` — create with a one-line header and nothing else.
 - `.repete/lessons/` — create the directory. Copy `${CLAUDE_PLUGIN_ROOT}/templates/lesson-card.md`
   to `.repete/lessons/_TEMPLATE.md` so the format is on hand.
+- `.repete/constitution.md` — copy from `${CLAUDE_PLUGIN_ROOT}/templates/constitution.md`.
+  This is the user's hard-invariants layer, re-injected each iteration. After copying the
+  commented starter, ask the user (once, briefly) whether they have hard invariants to seed
+  it (don't-touch dirs, the test command, API-stability, no-push, etc.). If they name any,
+  write them in as imperative one-liners and delete the comment block so it activates. If
+  they have none, leave the starter as-is (it stays inert until filled). Do NOT force this as
+  a blocking prompt — offer it and move on.
 
 If `.repete/loop.local.md` already exists and is `active: true`, STOP and tell the user a
 loop is already running (offer `/repete-status` or `/repete-cancel`).

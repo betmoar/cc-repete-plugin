@@ -5,6 +5,7 @@ iteration: 1
 session_id: ""
 max_iterations: 0
 context_budget_lines: 2500
+lesson_catalog_cap: 8
 mission_goal: ""
 status: running
 started_at: ""
@@ -24,6 +25,9 @@ started_at: ""
 
 <what to do this loop, in priority order. Reference real files/paths.>
 
-## Known traps (from .repete/lessons/)
+## Known traps
 
-<seeded at start / refreshed at each transition with the lessons that bite here>
+The hook injects a lessons **catalog** (slug · tags · severity · hits) into every
+iteration automatically. Consult it and `Read` only the relevant `.repete/lessons/`
+cards on demand — do not paste card contents here. This section stays a pointer; it
+must never hold card bodies (that would re-inject them every iteration).
