@@ -142,4 +142,35 @@ echo "$OUT" | jq -r '.reason' | awk '
 echo "$OUT" | jq -e '.reason | contains("001-trap")' >/dev/null 2>&1; assert "catalog card present in full stack" $?
 echo "$OUT" | jq -e '.reason | contains("do the thing") | not' >/dev/null 2>&1; assert "no card body leaked in full stack" $?
 
+echo "== L10: octal-looking hits (08/09) do not crash the arithmetic or garble the row (B1) =="
+D="$ROOT/l10"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+mkcard "$D" "001-octal" "build" high 09
+mkcard "$D" "002-normal" "x" high 8
+mktrans "$D/tr.jsonl" "working"
+# capture stderr too — an octal arithmetic error would print "value too great for base"
+ERROUT="$(CLAUDE_PROJECT_DIR="$D" CLAUDE_PLUGIN_ROOT="$REPO_ROOT" bash -c 'printf "%s" "$0" | bash "$1"' \
+  "$(jq -nc --arg tp "$D/tr.jsonl" --arg sid "s" '{transcript_path:$tp,session_id:$sid}')" "$HOOK" 2>&1 1>/dev/null)"
+[[ -z "$ERROUT" ]]; assert "no arithmetic error on stderr for hits:09" $?
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("001-octal")' >/dev/null 2>&1; assert "octal-hits card present (not dropped)" $?
+echo "$OUT" | jq -e '.reason | contains("hits:9")' >/dev/null 2>&1; assert "hits:09 rendered as decimal 9" $?
+# 001-octal (hits 9) must outrank 002-normal (hits 8) within same severity
+echo "$OUT" | jq -r '.reason' | awk '/001-octal/{a=NR} /002-normal/{b=NR} END{exit !(a>0 && b>0 && a<b)}'; assert "hits 9 ranks above hits 8 (numeric, not string)" $?
+
+echo "== L11: a tag containing '#' (c#/f#) survives the comment-strip (N1) =="
+D="$ROOT/l11"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+mkcard "$D" "001-csharp" "c#" high 1
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -e '.reason | contains("c#")' >/dev/null 2>&1; assert "c# tag not truncated by comment-strip" $?
+
+echo "== L12: lesson_catalog_cap: 0 means uncapped, no overflow note (S2) =="
+D="$ROOT/l12"; mkstate "$D" running true 1 0 0 '"g"' '"s"'
+perl -0777 -pi -e 's/lesson_catalog_cap: 8/lesson_catalog_cap: 0/' "$D/.repete/loop.local.md"
+for n in 1 2 3 4 5 6 7 8 9 10; do mkcard "$D" "card-$n" "t" high "$n"; done
+mktrans "$D/tr.jsonl" "working"
+runhook "$D" "$D/tr.jsonl" "s"
+[[ "$(echo "$OUT" | jq -r '.reason' | grep -cE '^  card-[0-9]+ ')" -eq 10 ]]; assert "cap=0 shows all 10 cards" $?
+echo "$OUT" | jq -e '.reason | contains("more —") | not' >/dev/null 2>&1; assert "cap=0 emits no overflow note" $?
+
 summary

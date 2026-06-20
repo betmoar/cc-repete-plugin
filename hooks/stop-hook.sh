@@ -59,7 +59,7 @@ card_field() { # file key
     /^---[[:space:]]*$/{f++; next}
     f==1 && index($0, k":")==1 {
       sub("^"k":[[:space:]]*","")
-      sub(/[[:space:]]*#.*$/,"")
+      sub(/[[:space:]]+#.*$/,"")
       gsub(/^[[:space:]]+|[[:space:]]+$/,"")
       print; exit
     }
@@ -86,6 +86,7 @@ build_catalog() { # cap
       *) continue ;;
     esac
     hits="$(card_field "$f" hits)"; [[ "$hits" =~ ^[0-9]+$ ]] || hits=1
+    hits=$((10#$hits))   # force base-10: a leading-zero hits (08/09) is decimal, not octal
     tags="$(card_field "$f" tags | tr -d '[] ')"
     rows+="$(printf '%d\t%09d\t%s\t%s\t%s\t%s' "$rank" "$((999999999 - hits))" "$slug" "$tags" "$sev" "$hits")"$'\n'
     total=$((total + 1))
@@ -148,7 +149,7 @@ printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'exit(/<repete-checkpoint>.*?<\/repe
 if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]]; then
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
   if [[ -n "$DONE" && "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
-    set_fm status done
+    set_fm status "done"
     set_fm active false
     emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
     exit 0
