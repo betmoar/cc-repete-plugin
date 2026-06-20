@@ -19,8 +19,10 @@ The previous loop hit its exit goal and proposed a next payload in `.repete/tran
    may have already edited `transition.md`; respect those edits. Fold in any `$ARGUMENTS`.
 2. Sanity-check against `.repete/MISSION.md`: is this next loop still serving the mission,
    or has it drifted? If it drifted, say so and propose a correction before proceeding.
-3. Refresh the **Known traps** section of the new payload from `.repete/lessons/` — pull the
-   cards whose tags match this next loop, so the loop starts forewarned.
+3. Do NOT copy lesson cards into the payload body. Lessons are surfaced automatically:
+   the hook builds a metadata catalog from `.repete/lessons/` every iteration and the
+   agent `Read`s the relevant cards on demand. The new payload's "Known traps" section
+   stays a pointer (see the template) — never a content sink.
 4. Promote: write the approved payload into the BODY of `.repete/loop.local.md` (replace the
    old body, keep/!update frontmatter). Then update frontmatter atomically:
    - `phase` → +1
@@ -37,8 +39,9 @@ should have) run `/clear`. Rebuild a fresh working context from externalized sta
 do not rely on conversation memory:
 
 1. Read, in order: `.repete/MISSION.md`, the body of `.repete/loop.local.md`,
-   `.repete/todo-next.md`, the relevant cards in `.repete/lessons/`, and `git log --oneline -15`.
-   If the `remember` plugin is active, also read `.remember/now.md`.
+   `.repete/constitution.md` (the user's hard invariants), `.repete/todo-next.md`, the
+   relevant cards in `.repete/lessons/`, and `git log --oneline -15`. If the `remember`
+   plugin is active, also read `.remember/now.md`.
 2. Give the user a 5-line situation report: mission, current loop's exit goal, what's done,
    what's pending, last commits.
 3. Set frontmatter `status` → running (leave `phase`/`iteration` as-is). Then resume working
