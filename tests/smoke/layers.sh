@@ -127,4 +127,19 @@ mkcard "$D" "002-added" "t" high 2          # add a card between Stops
 runhook "$D" "$D/tr.jsonl" "s"               # second Stop, same fixture
 echo "$OUT" | jq -e '.reason | contains("002-added")' >/dev/null 2>&1; assert "newly-added card appears in next catalog (fresh build)" $?
 
+echo "== L9: all four layers present, in order, in one re-inject =="
+D="$ROOT/l9"; mkstate "$D" running true 1 0 0 '"all green"' '"s"'
+printf '%s\n' "Never push to main." > "$D/.repete/constitution.md"
+mkcard "$D" "001-trap" "build,ci" high 3
+mktrans "$D/tr.jsonl" "mid-loop work"
+runhook "$D" "$D/tr.jsonl" "s"
+echo "$OUT" | jq -r '.reason' | awk '
+  /BODY-LINE-ONE/{b=NR}
+  /Known lessons/{c=NR}
+  /Never push to main/{k=NR}
+  /repete standing rules/{p=NR}
+  END{exit !(b<c && c<k && k<p)}'; assert "order brief<catalog<constitution<protocol" $?
+echo "$OUT" | jq -e '.reason | contains("001-trap")' >/dev/null 2>&1; assert "catalog card present in full stack" $?
+echo "$OUT" | jq -e '.reason | contains("do the thing") | not' >/dev/null 2>&1; assert "no card body leaked in full stack" $?
+
 summary
