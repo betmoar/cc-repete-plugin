@@ -134,18 +134,23 @@ set_fm iteration "$NEXT"
 # rule inside the body is preserved, not swallowed (I1).
 PAYLOAD_BODY="$(awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$STATE_FILE")"
 
-RULES="$(cat <<EOF
-
+# --- engine protocol (frozen, hook-versioned) -----------------------------
+# Read the shipped protocol template; fall back to an inline core if it is
+# unreadable (missing/botched install). Fail-functional: the loop must never
+# lose its two sentinels, matching the fail-open-on-missing-jq philosophy.
+PROTO_FALLBACK='
 --- repete standing rules (phase ${PHASE} · iteration ${NEXT}) ---
-- Re-read .repete/MISSION.md, .repete/todo-next.md and the cards in .repete/lessons/ BEFORE acting. Work from files and git, not from memory in this conversation.
-- The moment you notice work outside this loop's exit goal, append it to .repete/todo-next.md (one line: what + why + where). Do not chase it now.
-- When you hit a mistake, dead-end, or a fix that did not work, write a lesson card to .repete/lessons/ in the format the template defines. Reflect briefly: what you tried, what happened, the rule for next time.
-- When THIS loop's exit goal is satisfied (and only then): output a <repete-checkpoint>...</repete-checkpoint> block containing your proposed next-loop payload — seeded from .repete/todo-next.md and what you learned — then stop. The user approves it before the next loop starts.
-- Only when the MISSION goal stated in .repete/MISSION.md is unequivocally and verifiably TRUE: output <repete-done> with that exact goal string </repete-done>. Never emit either sentinel just to escape the loop.
-EOF
-)"
+- Work from files and git, not from memory in this conversation.
+- When THIS loop'"'"'s exit goal is satisfied (and only then): output a <repete-checkpoint>...</repete-checkpoint> block with your proposed next-loop payload, then stop.
+- Only when the MISSION goal in .repete/MISSION.md is verifiably TRUE: output <repete-done> with that exact goal string </repete-done>. Never emit either sentinel just to escape the loop.'
+PROTO="$(cat "${CLAUDE_PLUGIN_ROOT:-}/templates/protocol.md" 2>/dev/null)"
+[[ -n "$PROTO" ]] || PROTO="$PROTO_FALLBACK"
+PROTO="${PROTO//'${PHASE}'/$PHASE}"
+PROTO="${PROTO//'${NEXT}'/$NEXT}"
 
-REINJECT="$PAYLOAD_BODY$RULES"
+# --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
+REINJECT="$PAYLOAD_BODY"
+REINJECT+=$'\n'"$PROTO"
 
 jq -n --arg r "$REINJECT" --arg m "🔄 repete · phase ${PHASE} · iteration ${NEXT}" \
   '{decision:"block", reason:$r, systemMessage:$m}'
