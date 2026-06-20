@@ -21,7 +21,8 @@ chk "loop.local.md forbids pasting card bodies (pointer intent explicit)" "grep 
 chk "loop.local.md has lesson_catalog_cap frontmatter" "grep -q 'lesson_catalog_cap:' '$LL'"
 
 echo "== D2: repete-continue checkpoint step no longer copies card content =="
-chk "repete-continue does NOT say 'pull the cards'" "! grep -qi 'pull the cards' '$RC'"
+chk "repete-continue does NOT instruct pulling cards into the body" "! grep -ziE 'pull[[:space:]]+the[[:space:]]+cards' '$RC'"
+chk "repete-continue step 3 has the new 'do not copy' instruction" "grep -qi 'do not copy lesson cards' '$RC'"
 chk "repete-continue references the catalog mechanism" "grep -qiE 'catalog|agent-retriev|on demand' '$RC'"
 chk "repete-continue rehydrate reads constitution.md" "grep -q 'constitution.md' '$RC'"
 
