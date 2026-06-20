@@ -52,7 +52,9 @@ The hook builds the `reason` string from four parts, **in this order**:
 4. Engine protocol       (templates/protocol.md, or inline fallback)
 ```
 
-**Why this order — recency.** The "Lost in the Middle" U-curve and the recency-washout findings (§8) say instructions near the *end* of context are followed more reliably than those buried mid-context, and that early-position instructions decay over a long run. The two **frozen, must-follow** layers (constitution = user's hard rules; protocol = the exit-sentinel semantics) therefore go **last**. The evolving brief leads because it's the volatile working payload; lessons sit in the middle because they're advisory.
+**Why this order — frozen layers last.** The two **frozen, must-follow** layers (constitution = user's hard rules; protocol = the exit-sentinel semantics) go **last**, where last position is never worse and is plausibly marginally better for adherence. The evolving brief leads because it's the volatile working payload; lessons sit in the middle because they're advisory.
+
+> **Evidence scope (honest):** the positional findings in §8 (Lost-in-the-Middle U-curve, recency washout) are measured on **200K-token windows**. Within a single ~40–60 line re-inject block, positional effects are negligible — those results do **not** transfer at this scale. The ordering is therefore justified by the *semantic* argument (frozen must-follow layers should not be buried under volatile payload, and last is never worse), **not** by the U-curve citation. Keeping the order is near-free; the claim behind it is deliberately weak.
 
 This is also a deliberate formalization of an accident: v1's hardcoded RULES heredoc already appends last (`stop-hook.sh:148`, `REINJECT="$PAYLOAD_BODY$RULES"`). We keep that placement and make it intentional.
 
@@ -98,6 +100,7 @@ Known lessons (consult before acting; Read only the relevant ones):
 - **Ranking:** `severity` (high→low) then `hits` (desc). Highest-impact, most-recurrent lessons surface.
 - **Cap:** default **8** lines, with a `+M more — grep .repete/lessons/` overflow note. Configurable via a new `lesson_catalog_cap` frontmatter key (0 = uncapped, for small projects).
 - **Size:** ~30 chars/line → an 8-line catalog is ~250 chars, **bounded regardless of library size**. 200 cards still produce 8 lines + overflow.
+- **Parser robustness (required):** the catalog builder is the new fragile code — it parses frontmatter across N files, the exact place malformed input bites. It MUST be defensive: a card with missing/malformed frontmatter, a missing `slug` or `severity`, the `tags: [a, b, c]` array needing bracket/whitespace stripping, or the leading `<!-- … -->` comment the card template carries *before* its `---` — none of these may crash the builder or emit a garbled line. **Rule: skip un-parseable cards silently; a card missing `slug` or `severity` is omitted, never rendered broken.** A malformed lessons dir yields a shorter (or empty) catalog, never a broken re-inject. This is the catalog-specific instance of the §7 fail-functional guardrail.
 
 **Agent retrieves content with its own judgment.** The protocol rule becomes: *"Consult the lessons catalog above. `Read` only the cards whose tags match what you're about to do."* The agent knows the current sub-task; a bash tag-matcher does not. This is retrieval-as-tool-call (Voyager/MemGPT done right), not payload force-feeding.
 
@@ -107,9 +110,28 @@ Known lessons (consult before acting; Read only the relevant ones):
 
 "Consult the catalog" is a *soft* rule (the agent could ignore it). That's correct: lessons are **advisory**, unlike the done-guard which is safety-critical. We spend "hard" enforcement only on the sentinels (which live in code, in the hook's three-way decision — unchanged by this design). Advisory layers get advisory delivery.
 
+### Closing the back door: the "Known traps" body section
+
+The catalog decoupling is real at the hook, but v1 **re-couples it at the checkpoint** through a back door that this spec must close explicitly:
+
+- `templates/loop.local.md:27-29` has a `## Known traps (from .repete/lessons/)` section in the **brief body**.
+- `commands/repete-continue.md` §3 step 3 instructs: *"Refresh the Known traps section… pull the cards whose tags match this next loop."*
+
+"Pull the cards" means copying lesson **content** into the brief body. The brief body is the **evolving brief layer — re-injected every iteration (§3 line 1)**. So lesson bodies would ride every single re-inject, directly violating "no card bodies in the re-inject, ever" (§7). The catalog decoupling at the hook would be silently undone at the checkpoint. **This is the headline feature leaking.**
+
+**Resolution (required, not optional):**
+1. **`templates/loop.local.md`:** the `## Known traps` section is **redefined as a pointer**, not a content sink. It becomes at most a 1–2 line note: *"Relevant lessons: consult the catalog injected each iteration; `Read` cards on demand."* It MUST NOT contain card bodies.
+2. **`commands/repete-continue.md` §3 step 3:** rewritten to **stop pulling card content into the body**. The checkpoint no longer copies lessons anywhere; it relies entirely on the hook's per-iteration catalog + agent retrieval. The step's job shrinks to: confirm the catalog mechanism is live for the next loop (it always is — the hook builds it), nothing to hand-copy.
+
+After this, card bodies enter context through exactly **one** path — the agent's on-demand `Read` — and never through the brief body or the re-inject.
+
 ### Decoupling achieved
 
-This is the only design where **lesson count is decoupled from re-inject size**. The measured rot source — pulling every card into context each iteration — is eliminated: the catalog grows one *line* per card, and card *bodies* enter context only on demand, only when relevant.
+This is the only design where **lesson count is decoupled from re-inject size**. The measured rot source — pulling every card into context each iteration — is eliminated: the catalog grows one *line* per card, and card *bodies* enter context only on demand, only when relevant. The "Known traps" back door (above) is closed so this holds end-to-end, not just at the hook.
+
+### Ranking signal is soft-maintained
+
+The catalog ranks by `severity` then `hits`. `severity` is set once at card creation; `hits` is bumped only if the agent diligently dedups recurring lessons into an existing card (a soft rule, per the card template's own guidance). So ranking *quality* depends on agent discipline — a never-deduped library ranks by severity alone with all `hits:1`. This is acceptable and consistent: lessons are an advisory layer (§5 "soft is correct for lessons"), so a soft-maintained ranking signal is in-band. It is **not** a hard signal and the design does not treat it as one.
 
 ## 6. Changes by file
 
@@ -125,9 +147,12 @@ This is the only design where **lesson count is decoupled from re-inject size**.
   - Assemble `reason` in the §3 order: brief, catalog, constitution, protocol.
   - Read `lesson_catalog_cap` frontmatter (default 8).
 - `commands/repete.md` (scaffold step 2): create `.repete/constitution.md` from the template; prompt the user (briefly) for any known hard invariants to seed it, or leave the commented starter. Add `lesson_catalog_cap` to the frontmatter it writes.
-- `templates/loop.local.md`: add `lesson_catalog_cap: 8` to frontmatter.
-- `commands/repete-continue.md`: the `paused-context` rehydrate path should read `.repete/constitution.md` too (it's part of the boot manifest). The checkpoint path's "refresh Known traps from lessons" step (currently inject-all-flavored) aligns with the catalog model — note that lessons are now agent-retrieved, not bulk-copied into the body.
-- `commands/repete-status.md`: already reports lesson count + top slugs — extend to show the catalog as the hook would render it (so the user previews what the loop sees).
+- `templates/loop.local.md`: add `lesson_catalog_cap: 8` to frontmatter. **Redefine the `## Known traps` section (lines 27-29) as a 1–2 line pointer** ("Relevant lessons: consult the catalog injected each iteration; `Read` cards on demand") — it MUST NOT hold card bodies (§5 back-door resolution).
+- `commands/repete-continue.md`:
+  - `paused-context` rehydrate path: also read `.repete/constitution.md` (it's part of the boot manifest).
+  - `paused-checkpoint` path §3 step 3: **rewrite to stop pulling card content into the brief body.** The checkpoint relies on the hook's per-iteration catalog + agent retrieval; there is nothing to hand-copy (§5 back-door resolution).
+- `commands/repete-status.md`: already reports lesson count + top slugs — extend to show the catalog as the hook would render it (so the user previews what the loop sees). Also surface `.repete/constitution.md` presence/size (with the §7 over-length soft warning).
+- `templates/MISSION.md`: the `## Constraints` section becomes a **one-line pointer** — "Hard invariants: see `.repete/constitution.md`" — per the Q3 resolution (constraints have a single source). MISSION.md stays the human narrative doc.
 
 ### Unchanged (explicitly)
 - The hook's **three-way decision** (done / checkpoint / continue) and both safety yields (max_iter, context_budget). This design touches only what goes *into* the re-inject, not the control flow that decides *whether* to re-inject.
@@ -156,12 +181,12 @@ Full brief in conversation; load-bearing findings, tagged [MEASURED]/[REPORTED]/
 ## 9. Out of scope (this spec)
 
 - External fresh-process runner (possible v3, evidence-gated).
-- `wc -l` → `wc -c` context-budget fix; no-progress/thrash detection; missing-`jq` one-time warning. Separate small-improvements pass.
+- `wc -l` → `wc -c` context-budget fix; no-progress/thrash detection; missing-`jq` one-time warning. Separate small-improvements pass. **Forward-coupling note:** the three new frozen layers (catalog + constitution + protocol) re-inject every iteration, adding a fixed per-iteration cost to the transcript that the reset valve measures. That is correct behavior — but when the later pass switches `wc -l`→`wc -c`, these layers measurably shift the budget threshold (more bytes per iteration). The budget pass must account for this re-inject overhead when recalibrating the default, rather than rediscovering it.
 - Cross-project / global lessons (`~/.claude/repete/`), recurrence-gated promotion, consolidation pass — the original v3.
 - Mission as N named phases — the original v2, now v3+.
 
-## 10. Open questions for reviewer
+## 10. Resolved design questions
 
-1. **Catalog cap default = 8.** Right number, or do you want it lower (tighter) / higher? (Bounded either way.)
-2. **Constitution seeding at `/repete` setup.** Prompt the user for invariants interactively, or always lay down the commented starter and let them fill it? (Leaning: lay down starter, *offer* to seed from their stated constraints, don't force a prompt.)
-3. **Should `MISSION.md`'s Constraints section migrate into `constitution.md`?** They overlap. Options: (a) leave both, constitution is the re-injected one; (b) constitution *replaces* the Constraints section; (c) constitution re-injects, Constraints stays as human-readable mission doc. (Leaning: c — different audiences, MISSION.md is for the human, constitution is for the loop.)
+1. **Catalog cap default = 8.** RESOLVED: keep 8. A v1 project-only library on a supervised single-track mission rarely exceeds ~8–12 cards, so the cap seldom bites; when it does, 8 lines is the right scan-without-dilution size.
+2. **Constitution seeding at `/repete` setup.** RESOLVED: lay down the commented starter `.repete/constitution.md`, **offer** to seed it from constraints the user states, do **not** force an interactive prompt. Many loops have no hard invariants; forcing a prompt taxes every start.
+3. **`MISSION.md` Constraints vs `constitution.md`.** RESOLVED: **(b)-modified** — constraints live **solely** in `.repete/constitution.md` (single source). `MISSION.md`'s `## Constraints` section becomes a one-line pointer. Rationale: two user-owned files both holding "constraints" is a standing desync surface, and "user can reconcile" is the soft-discipline trap rejected elsewhere in this design. The narrative-vs-imperative granularity that keeping both would buy is not worth a drift surface.
