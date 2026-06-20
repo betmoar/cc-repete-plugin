@@ -138,7 +138,7 @@ echo "$OUT" | jq -r '.reason' | awk '
   /Known lessons/{c=NR}
   /Never push to main/{k=NR}
   /repete standing rules/{p=NR}
-  END{exit !(b<c && c<k && k<p)}'; assert "order brief<catalog<constitution<protocol" $?
+  END{exit !(b>0 && c>0 && k>0 && p>0 && b<c && c<k && k<p)}'; assert "all four layers present AND ordered brief<catalog<constitution<protocol" $?
 echo "$OUT" | jq -e '.reason | contains("001-trap")' >/dev/null 2>&1; assert "catalog card present in full stack" $?
 echo "$OUT" | jq -e '.reason | contains("do the thing") | not' >/dev/null 2>&1; assert "no card body leaked in full stack" $?
 
