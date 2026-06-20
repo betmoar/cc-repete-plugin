@@ -9,7 +9,7 @@ lesson library, and **fights context rot** by turning a transcript-size budget i
 `/clear` + rehydrate checkpoint. It reuses the [`remember`](https://github.com/anthropics/claude-code)
 plugin for tiered memory rather than reinventing it.
 
-This is **v1** — a single evolving loop with project-local lessons. Multi-phase mission
+This is **v0.1.1** — a single evolving loop with project-local lessons. Multi-phase mission
 chaining (v2) and cross-project global learning (v3) build on the same state model.
 
 ## How it works
@@ -41,6 +41,20 @@ drift and bad decisions compound.
 | `/repete-continue` | Approve a checkpoint's next payload, or rehydrate after a `/clear` |
 | `/repete-status`   | Read-only view of phase, iteration, goal, pending TODOs, lessons   |
 | `/repete-cancel`   | Deactivate the loop (state preserved for review)                   |
+
+## Skills
+
+The plugin bundles two skills (auto-discovered, no install step) that carry the
+operational and design judgment, so the commands stay terse:
+
+- **running-repete-loops** — *operate* a repete loop well: writing a verifiable
+  mission goal, the four memory layers (what goes where), authoring lesson cards,
+  reading the checkpoint/budget states, sane defaults. Reach for it whenever you
+  start, resume, or debug a run.
+- **designing-autonomous-loops** — *decide* whether and how to loop at all:
+  single-session re-inject vs. fresh-process vs. one-shot, and how to fight
+  context rot with memory layering. Grounded in measured rot findings. Reach for
+  it when weighing "should I loop this" or architecting a long run.
 
 ## State layout (`.repete/`, per project, git-ignored)
 
