@@ -9,7 +9,11 @@
 #
 # Plus two safety yields that also stop autonomous looping:
 #   - max_iterations reached
-#   - context_budget_lines exceeded  -> prompt user to /clear then /repete-continue
+#   - context_budget_lines exceeded  -> two-step yield: first re-inject one turn
+#     to write a .repete/handoff.md snapshot (transient 'summarizing' status),
+#     then prompt the user to /clear and /repete-continue. While 'summarizing',
+#     that budget two-step owns the Stop: sentinels and the iteration cap are
+#     suppressed so nothing diverts the loop out of the /clear flow.
 #
 set -uo pipefail
 
@@ -177,7 +181,11 @@ fi  # end: sentinel handling suppressed while 'summarizing'
 # ---- safety yield: max iterations ----------------------------------------
 # iteration counts completed work turns: with max_iterations=3, turns 1,2,3 run,
 # then this fires (3>=3) before a 4th. So N = N work cycles, as intended.
-if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
+# Skip while 'summarizing': pass-1 already truncated handoff.md and is awaiting
+# the snapshot turn, so letting the cap preempt here would yield paused-max with
+# an empty handoff and lose the in-flight delta. The budget two-step below owns
+# this Stop; the cap re-applies normally once the loop returns to 'running'.
+if [[ "$STATUS" != "summarizing" && "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
   set_fm status paused-max
   emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
   exit 0
