@@ -34,18 +34,24 @@ The previous loop hit its exit goal and proposed a next payload in `.repete/tran
 
 ## status: paused-context — you just /clear-ed, rehydrate and resume
 
-The loop paused because the transcript crossed `context_budget_lines`. The user has (or
-should have) run `/clear`. Rebuild a fresh working context from externalized state ONLY —
-do not rely on conversation memory:
+The loop paused because the transcript crossed `context_budget_lines`. Before pausing, the
+hook had you write a handoff snapshot of in-flight state to `.repete/handoff.md`. The user
+has (or should have) run `/clear`. Rebuild a fresh working context from externalized state
+ONLY — do not rely on conversation memory:
 
-1. Read, in order: `.repete/MISSION.md`, the body of `.repete/loop.local.md`,
-   `.repete/constitution.md` (the user's hard invariants), `.repete/todo-next.md`, the
-   relevant cards in `.repete/lessons/`, and `git log --oneline -15`. If the `remember`
-   plugin is active, also read `.remember/now.md`.
+1. Read, in order: `.repete/handoff.md` (the previous session's in-flight snapshot — done /
+   in-flight / next step / open questions; may be absent if this is an older loop),
+   `.repete/MISSION.md`, the body of `.repete/loop.local.md`, `.repete/constitution.md`
+   (the user's hard invariants), `.repete/todo-next.md`, the relevant cards in
+   `.repete/lessons/`, and `git log --oneline -15`. If the `remember` plugin is active, also
+   read `.remember/now.md`.
 2. Give the user a 5-line situation report: mission, current loop's exit goal, what's done,
-   what's pending, last commits.
-3. Set frontmatter `status` → running (leave `phase`/`iteration` as-is). Then resume working
-   this loop's exit goal. The hook will pick the loop back up on your next Stop.
+   what's pending (lead with the handoff's "next concrete step"), last commits.
+3. Update frontmatter atomically: `status` → running (leave `phase`/`iteration` as-is) and
+   `session_id` → `""`. Blanking `session_id` lets the Stop hook re-stamp it to THIS
+   post-`/clear` session on the next Stop; without it the hook's session-isolation guard can
+   ignore the resumed session and the loop looks dead. Then resume working this loop's exit
+   goal. The hook will pick the loop back up on your next Stop.
 
 ## status: paused-max — the iteration cap tripped
 

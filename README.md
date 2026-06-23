@@ -26,9 +26,12 @@ decision:
 Two safety yields also stop the autonomous run and hand control back:
 
 - **`max_iterations`** reached → paused; `/repete-continue` to raise the cap.
-- **`context_budget_lines`** exceeded → paused; `/clear` then `/repete-continue` rehydrates
-  a fresh context from `.repete/` state. This is the anti-context-rot mechanism. The budget
-  counts raw transcript JSONL lines (a loose proxy for context size, not tokens), default 2500.
+- **`context_budget_lines`** exceeded → the engine first spends one turn writing a handoff
+  snapshot of in-flight state to `.repete/handoff.md` (transient `summarizing` status), then
+  pauses; `/clear` then `/repete-continue` rehydrates a fresh context from `.repete/` state —
+  reading the handoff first — so the restart is **lossless**. This is the anti-context-rot
+  mechanism. The budget counts raw transcript JSONL lines (a loose proxy for context size,
+  not tokens), default 2500.
 
 So: iterations run unattended; **you are only in the loop at transitions** — exactly where
 drift and bad decisions compound.
@@ -64,6 +67,7 @@ operational and design judgment, so the commands stay terse:
 ├── loop.local.md     # frontmatter (phase/iteration/status/budgets) + current loop payload
 ├── todo-next.md      # out-of-scope discoveries — seeds the next loop
 ├── transition.md     # the agent's proposed next payload, awaiting your approval
+├── handoff.md        # in-flight snapshot written at a context checkpoint, read on rehydrate
 └── lessons/          # one card per mistake/insight; retrieved into future loops
 ```
 

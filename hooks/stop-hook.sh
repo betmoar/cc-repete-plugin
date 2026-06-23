@@ -121,6 +121,7 @@ if [[ -z "$STATE_SESSION" && -n "$HOOK_SESSION" ]]; then
 fi
 [[ -n "$STATE_SESSION" && -n "$HOOK_SESSION" && "$STATE_SESSION" != "$HOOK_SESSION" ]] && exit 0
 
+STATUS="$(fm status)"
 ITERATION="$(fm iteration)"; [[ "$ITERATION" =~ ^[0-9]+$ ]] || ITERATION=1
 PHASE="$(fm phase)";         [[ "$PHASE" =~ ^[0-9]+$ ]]     || PHASE=1
 MAX_ITER="$(fm max_iterations)";        [[ "$MAX_ITER" =~ ^[0-9]+$ ]]   || MAX_ITER=0
@@ -175,11 +176,34 @@ if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
 fi
 
 # ---- safety yield: context budget (rot-as-checkpoint) --------------------
+# Two steps so the restart is LOSSLESS: the conversation /clear discards any
+# in-flight state not yet on disk, so before yielding we spend ONE re-inject
+# turn having the agent snapshot that delta to .repete/handoff.md.
+#   pass 1 (status running)     -> mark 'summarizing', block + ask for handoff
+#   pass 2 (status summarizing) -> handoff written, yield for /clear
 if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   LINES="$(wc -l < "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
   if [[ "${LINES:-0}" -gt "$CTX_BUDGET" ]]; then
-    set_fm status paused-context
-    emit "🧹 repete: context budget (${CTX_BUDGET} lines) exceeded. Run /clear, then /repete-continue to resume this loop with a fresh context rehydrated from .repete/."
+    if [[ "$STATUS" == "summarizing" ]]; then
+      set_fm status paused-context
+      emit "🧹 repete: context budget (${CTX_BUDGET} lines) exceeded; handoff snapshot saved to .repete/handoff.md. Run /clear, then /repete-continue to resume this loop with a fresh context rehydrated from .repete/."
+      exit 0
+    fi
+    # pass 1: do NOT bump iteration (the snapshot turn is free) and re-inject a
+    # minimal, focused brief — not the full payload/catalog/protocol.
+    set_fm status summarizing
+    HANDOFF_REINJECT='--- repete context checkpoint: write a handoff snapshot, then STOP ---
+The context budget is reached and this conversation is about to be /clear-ed. Capture the in-flight state that is NOT yet on disk so the next session resumes losslessly.
+
+Write .repete/handoff.md (overwrite it) with these sections, tight — under ~30 lines total:
+- Done this stretch: what you just finished, with file paths / commit refs.
+- In flight: what is half-done right now and exactly where you left off.
+- Next concrete step: the single next action to take after the reload.
+- Open questions & risks: anything unresolved the next session must know.
+
+Write durable facts to their normal homes too if not already there (loop body, .repete/todo-next.md, a lesson card, a commit). Then STOP. Do NOT continue the loop work, and do NOT emit <repete-checkpoint> or <repete-done>.'
+    jq -n --arg r "$HANDOFF_REINJECT" --arg m "🧹 repete · context budget reached — saving handoff snapshot before /clear" \
+      '{decision:"block", reason:$r, systemMessage:$m}'
     exit 0
   fi
 fi

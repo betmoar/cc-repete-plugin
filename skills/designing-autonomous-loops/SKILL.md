@@ -94,6 +94,14 @@ Designing a loop without knowing the rot curve is how budgets get set wrong. The
 - **Summarization is itself a rot vector.** Summaries lose subtle context whose importance only
   shows up later; raw retrieved facts beat summaries. [MEASURED: LOCOMO; Anthropic concedes
   lossiness.] So prefer **lossless re-read from disk** over in-context summarize-and-compress.
+  Distinguish two things that both involve "writing a summary", because only one is the rot
+  vector: **summarize-and-continue** — compress the window and keep reasoning in the *same
+  degraded thread* — is the discouraged move, and it never replaces re-reading durable facts.
+  A **handoff snapshot** is different: a tiny capture of *uncommitted in-flight delta* (what's
+  half-done + the single next step) written right before a clean restart, so that delta isn't
+  lost *entirely* across the context wipe. It supplements the restart's lossless re-read; it is
+  never a substitute for it. The first prevents nothing and poisons the window; the second
+  prevents total loss of in-flight state and is thrown away once the durable facts are re-read.
 
 The practical rule of thumb (moderate confidence, partly extrapolated): for reasoning-heavy
 work, force a rehydrate-from-disk well before ~50% of the window — roughly the **30–50K
@@ -114,7 +122,9 @@ from **evolving** memory and **retrieves** rather than injects-everything:
    do it for you.
 2. **Evolving working memory on disk.** The current task payload, updated at each boundary.
    Persist it to disk and **re-read** it — lossless retrieval beats carrying a degrading copy in
-   context, and beats summarizing it.
+   context, and beats summarizing it. Externalize *continuously*, not just at boundaries: the
+   more working state already on disk, the less a restart loses. The residual that hasn't yet
+   landed on disk when you reset is the only thing a handoff snapshot needs to carry.
 3. **A retrieved lesson library, not an injected one.** Store *distilled* reflections (the rule,
    not the transcript) [MEASURED: Reflexion +8% over raw traces], and surface them by retrieval —
    inject a lightweight catalog, pull full content on demand [Voyager top-K]. Injecting every
@@ -136,7 +146,9 @@ simply "don't bury the must-follow rules.")
 4. **Layer the memory.** Frozen constitution (short, last) + evolving brief (disk, re-read) +
    distilled lessons (retrieved via catalog, not injected).
 5. **Set the rot valve.** Plan to rehydrate-from-disk in the ~30–50K-token band, earlier if
-   dead-ends are piling up. Lossless re-read, never summarize-and-continue.
+   dead-ends are piling up. Lossless re-read, never summarize-and-continue — but do snapshot
+   the uncommitted in-flight delta to disk right before the reset, so the clean restart is
+   lossless rather than merely clean.
 6. **Mitigation is soft on a hook spine.** Single-session leans on prompt rules + the human at
    checkpoints; if the real workload drifts to unsupervised hundreds-of-K runs, that's the
    signal to graduate to a fresh-process runner — a decision to make on your own measured
