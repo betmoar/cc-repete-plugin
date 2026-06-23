@@ -215,8 +215,15 @@ if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
       # are only an <angle-bracket placeholder>, and blank lines.
       HANDOFF_REAL=""
       if [[ -f "$REPETE_DIR/handoff.md" ]]; then
+        # Decide "filled" by stripping ONLY the template's own scaffolding, then
+        # checking whether anything remains. We strip the literal section
+        # headings the template ships (not any '#'-leading line — so real content
+        # like "#123 revert" or "# TODO finish parser" still counts), whole-line
+        # <angle-bracket placeholders>, HTML comments, and blanks. Keeping the
+        # heading list in sync with templates/handoff.md is the small coupling
+        # cost of not misclassifying user content as scaffolding.
         HANDOFF_REAL="$(perl -0777 -pe 's/<!--.*?-->//gs' "$REPETE_DIR/handoff.md" 2>/dev/null \
-          | grep -vE '^[[:space:]]*#' \
+          | grep -vxE '[[:space:]]*##[[:space:]]+(Done this stretch|In flight|Next concrete step|Open questions & risks)[[:space:]]*' \
           | grep -vE '^[[:space:]]*<[^>]*>[[:space:]]*$' \
           | grep -vE '^[[:space:]]*$' || true)"
       fi
