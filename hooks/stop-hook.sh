@@ -9,7 +9,11 @@
 #
 # Plus two safety yields that also stop autonomous looping:
 #   - max_iterations reached
-#   - context_budget_lines exceeded  -> prompt user to /clear then /repete-continue
+#   - context_budget_lines exceeded  -> two-step yield: first re-inject one turn
+#     to write a .repete/handoff.md snapshot (transient 'summarizing' status),
+#     then prompt the user to /clear and /repete-continue. While 'summarizing',
+#     that budget two-step owns the Stop: sentinels and the iteration cap are
+#     suppressed so nothing diverts the loop out of the /clear flow.
 #
 set -uo pipefail
 
@@ -121,6 +125,7 @@ if [[ -z "$STATE_SESSION" && -n "$HOOK_SESSION" ]]; then
 fi
 [[ -n "$STATE_SESSION" && -n "$HOOK_SESSION" && "$STATE_SESSION" != "$HOOK_SESSION" ]] && exit 0
 
+STATUS="$(fm status)"
 ITERATION="$(fm iteration)"; [[ "$ITERATION" =~ ^[0-9]+$ ]] || ITERATION=1
 PHASE="$(fm phase)";         [[ "$PHASE" =~ ^[0-9]+$ ]]     || PHASE=1
 MAX_ITER="$(fm max_iterations)";        [[ "$MAX_ITER" =~ ^[0-9]+$ ]]   || MAX_ITER=0
@@ -145,6 +150,12 @@ norm() { printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'; }
 HAS_CHECKPOINT=0
 printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'exit(/<repete-checkpoint>.*?<\/repete-checkpoint>/s ? 0 : 1)' && HAS_CHECKPOINT=1
 
+# While 'summarizing' (the pass-1 handoff turn), the agent was told NOT to emit
+# any sentinel; if it does so by accident, the pass-2 budget yield below must
+# still win — otherwise a stray <repete-checkpoint>/<repete-done> would divert
+# the loop out of the /clear flow. Suppress sentinel handling in this state.
+if [[ "$STATUS" != "summarizing" ]]; then
+
 # ---- (1) mission done? ----------------------------------------------------
 if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]]; then
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
@@ -165,21 +176,100 @@ if [[ $HAS_CHECKPOINT -eq 1 ]]; then
   exit 0
 fi
 
+fi  # end: sentinel handling suppressed while 'summarizing'
+
 # ---- safety yield: max iterations ----------------------------------------
 # iteration counts completed work turns: with max_iterations=3, turns 1,2,3 run,
 # then this fires (3>=3) before a 4th. So N = N work cycles, as intended.
-if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
+# Skip while 'summarizing': pass-1 already truncated handoff.md and is awaiting
+# the snapshot turn, so letting the cap preempt here would yield paused-max with
+# an empty handoff and lose the in-flight delta. The budget two-step below owns
+# this Stop; the cap re-applies normally once the loop returns to 'running'.
+if [[ "$STATUS" != "summarizing" && "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
   set_fm status paused-max
   emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
   exit 0
 fi
 
 # ---- safety yield: context budget (rot-as-checkpoint) --------------------
+# Two steps so the restart can be lossless: the conversation /clear discards any
+# in-flight state not yet on disk, so before yielding we spend ONE re-inject
+# turn having the agent snapshot that delta to .repete/handoff.md. The restart
+# is lossless only if that snapshot is actually written — pass 2 verifies it and
+# warns if it's missing/empty, in which case rehydrate falls back to durable
+# on-disk state (committed work, git, loop body).
+#   pass 1 (any non-'summarizing' status) -> mark 'summarizing', block + ask for handoff
+#   pass 2 (status 'summarizing')         -> verify handoff, yield for /clear
 if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   LINES="$(wc -l < "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
   if [[ "${LINES:-0}" -gt "$CTX_BUDGET" ]]; then
-    set_fm status paused-context
-    emit "🧹 repete: context budget (${CTX_BUDGET} lines) exceeded. Run /clear, then /repete-continue to resume this loop with a fresh context rehydrated from .repete/."
+    if [[ "$STATUS" == "summarizing" ]]; then
+      set_fm status paused-context
+      # Treat a handoff as "saved" only if the agent actually FILLED it. A bare
+      # -s/non-whitespace test would pass a copied-but-unfilled template, since
+      # the template's HTML comment, "## headings" and "<placeholder>" lines are
+      # all non-whitespace — a false "saved" that leads the user to /clear and
+      # lose the delta. So strip the structural scaffolding (mirrors the
+      # constitution "effectively-empty -> skip" test below) and require real
+      # content to remain: drop <!-- --> comments, markdown headings, lines that
+      # are only an <angle-bracket placeholder>, and blank lines.
+      HANDOFF_REAL=""
+      if [[ -f "$REPETE_DIR/handoff.md" ]]; then
+        # Decide "filled" by stripping ONLY the template's own scaffolding, then
+        # checking whether anything remains. We strip the literal section
+        # headings the template ships (not any '#'-leading line — so real content
+        # like "#123 revert" or "# TODO finish parser" still counts), whole-line
+        # <angle-bracket placeholders>, HTML comments, and blanks. Keeping the
+        # heading list in sync with templates/handoff.md is the small coupling
+        # cost of not misclassifying user content as scaffolding.
+        HANDOFF_REAL="$(perl -0777 -pe 's/<!--.*?-->//gs' "$REPETE_DIR/handoff.md" 2>/dev/null \
+          | grep -vxE '[[:space:]]*##[[:space:]]+(Done this stretch|In flight|Next concrete step|Open questions & risks)[[:space:]]*' \
+          | grep -vE '^[[:space:]]*<[^>]*>[[:space:]]*$' \
+          | grep -vE '^[[:space:]]*$' || true)"
+      fi
+      if [[ -n "$HANDOFF_REAL" ]]; then
+        emit "🧹 repete: context budget (${CTX_BUDGET} lines) exceeded; handoff snapshot saved to .repete/handoff.md. Run /clear, then /repete-continue to resume this loop with a fresh context rehydrated from .repete/."
+      else
+        emit "⚠️ repete: context budget (${CTX_BUDGET} lines) exceeded but .repete/handoff.md is missing, empty, or still the unfilled template — the in-flight delta was NOT captured. You can still /clear then /repete-continue (rehydrate falls back to committed state, git, and the loop body), but expect to re-derive whatever was only in the cleared conversation."
+      fi
+      exit 0
+    fi
+    # pass 1: do NOT bump iteration (the snapshot turn is free) and re-inject a
+    # minimal, focused brief — not the full payload/catalog/protocol.
+    # Truncate any stale handoff first, so pass-2's filled-content test proves
+    # THIS cycle's agent actually wrote one, not that an old snapshot lingers.
+    : > "$REPETE_DIR/handoff.md"
+    set_fm status summarizing
+    HANDOFF_REINJECT='--- repete context checkpoint: write a handoff snapshot, then STOP ---
+The context budget is reached and this conversation is about to be /clear-ed. Capture the in-flight state that is NOT yet on disk so the next session resumes losslessly.
+
+Write .repete/handoff.md (overwrite it) with these sections, tight — under ~30 lines total:
+- Done this stretch: what you just finished, with file paths / commit refs.
+- In flight: what is half-done right now and exactly where you left off.
+- Next concrete step: the single next action to take after the reload.
+- Open questions & risks: anything unresolved the next session must know.
+
+Write durable facts to their normal homes too if not already there (loop body, .repete/todo-next.md, a lesson card, a commit). Then STOP. Do NOT continue the loop work, and do NOT emit <repete-checkpoint> or <repete-done>.'
+    jq -n --arg r "$HANDOFF_REINJECT" --arg m "🧹 repete · context budget reached — saving handoff snapshot before /clear" \
+      '{decision:"block", reason:$r, systemMessage:$m}'
+    exit 0
+  fi
+fi
+
+# Recover from a stranded 'summarizing': every budget yield above exits, so
+# reaching here means we are NOT over budget (raised cap, shrunk transcript, or
+# budget disabled). Clear the transient status so we don't take the pass-2
+# paused-context path on a future trip without first writing a fresh handoff.
+if [[ "$STATUS" == "summarizing" ]]; then
+  set_fm status running
+  STATUS=running
+  # The max-iterations yield above was skipped because status was 'summarizing'.
+  # Now that we've returned to 'running', re-apply it here so a cap reached
+  # during the handoff is still enforced on THIS Stop — otherwise the loop would
+  # run one cycle past the configured cap before the next Stop catches it.
+  if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
+    set_fm status paused-max
+    emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
     exit 0
   fi
 fi
@@ -227,6 +317,8 @@ fi
 # Read the shipped protocol template; fall back to an inline core if it is
 # unreadable (missing/botched install). Fail-functional: the loop must never
 # lose its two sentinels, matching the fail-open-on-missing-jq philosophy.
+# shellcheck disable=SC2016  # ${PHASE}/${NEXT} are literal placeholder tokens,
+# substituted below — they must NOT expand here (single quotes are deliberate).
 PROTO_FALLBACK='
 --- repete standing rules (phase ${PHASE} · iteration ${NEXT}) ---
 - Work from files and git, not from memory in this conversation.
@@ -238,7 +330,10 @@ PROTO_FALLBACK='
 PROTO=""
 [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && PROTO="$(cat "${CLAUDE_PLUGIN_ROOT}/templates/protocol.md" 2>/dev/null)"
 [[ -n "$PROTO" ]] || PROTO="$PROTO_FALLBACK"
+# shellcheck disable=SC2016  # single quotes make the search PATTERN the literal
+# token '${PHASE}'/'${NEXT}'; this is the substitution, expanding it would break it.
 PROTO="${PROTO//'${PHASE}'/$PHASE}"
+# shellcheck disable=SC2016  # literal-token search pattern, see above.
 PROTO="${PROTO//'${NEXT}'/$NEXT}"
 
 # --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---

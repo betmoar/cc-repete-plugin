@@ -121,8 +121,18 @@ The loop hands control back to the human in four situations. Recognize which one
   `/repete-continue` to promote it and start the next loop. This is the normal evolving-loop
   boundary and where you steer.
 - **`paused-context`** — the transcript crossed `context_budget_lines`. This is the anti-rot
-  valve. Run `/clear`, then `/repete-continue` rehydrates a fresh context **from disk only**
-  (MISSION.md, the loop body, todo-next, lessons, git log) — not from the wiped conversation.
+  valve, and it's a *two-step* yield you don't have to drive manually: on the first
+  over-budget Stop the hook flips to a transient `summarizing` status and spends one turn
+  having the agent write a handoff snapshot of in-flight state (done / in-flight / next step /
+  open questions) to `.repete/handoff.md`; on the next Stop it pauses. Run `/clear`, then
+  `/repete-continue` rehydrates a fresh context **from disk only** — reading `handoff.md`
+  first, then MISSION.md, the loop body, todo-next, lessons, git log — not from the wiped
+  conversation. When the handoff is present and non-empty it makes the restart lossless rather
+  than just clean: the in-flight delta survives the wipe. If the agent fails to write it the
+  hook warns and rehydrate leans on the durable on-disk state instead — still clean, but the
+  uncommitted delta is lost, which is exactly why you keep progress on disk every iteration
+  (see Budgets below). `/repete-continue` also blanks `session_id` so the loop reattaches to
+  the post-`/clear` session.
 - **`paused-max`** — the iteration cap tripped. Either raise `max_iterations` and resume, or
   treat the current state as a checkpoint and `/repete-cancel`. If you keep hitting this, the
   mission goal is probably a vibe — go back and make it checkable.
@@ -142,6 +152,14 @@ safe one, so an accidental co-occurrence never tears the loop down.
   rehydrate cycle above. This is a *coarse* proxy; if a loop reads large files it rots faster
   than the line count implies, so don't treat hitting the budget as the only rot signal —
   if outputs degrade before the budget trips, checkpoint and rehydrate manually.
+
+  The engine asks the agent to snapshot in-flight state to `.repete/handoff.md` when the budget
+  trips, so the boundary isn't something to babysit — but treat that snapshot as a thin,
+  best-effort safety net, not a guarantee: the write can fail, in which case the hook warns and
+  the rehydrate falls back to durable on-disk state. Keep durable progress on disk *every*
+  iteration (update the loop body, append to `todo-next.md`, write lesson cards, commit) so the
+  handoff only has to carry the small uncommitted residual — then even a missing snapshot loses
+  nothing that mattered.
 
 ## Scaffolding a new run — the checklist
 

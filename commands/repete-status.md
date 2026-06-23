@@ -29,6 +29,10 @@ Present a compact report:
   protocol), warn that long frozen layers degrade adherence (rule count is the killer).
 - **What to do next**, mapped from `status`:
   - `running` → loop is live; it will continue on the next Stop.
+  - `summarizing` → transient: the hook is having the agent write `.repete/handoff.md`
+    before the context-budget pause. Nothing to do — let it finish; it becomes
+    `paused-context` on the next Stop. (If it's stuck here with the budget no longer
+    exceeded, the next Stop resets it to `running`.)
   - `paused-checkpoint` → `/repete-continue` to approve the next payload.
   - `paused-context` → `/clear` then `/repete-continue`.
   - `paused-max` → `/repete-continue` to raise the cap, or `/repete-cancel`.
