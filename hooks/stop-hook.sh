@@ -195,6 +195,9 @@ if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
     fi
     # pass 1: do NOT bump iteration (the snapshot turn is free) and re-inject a
     # minimal, focused brief — not the full payload/catalog/protocol.
+    # Truncate any stale handoff first, so pass-2's `-s` non-empty test proves
+    # THIS cycle's agent actually wrote one, not that an old snapshot lingers.
+    : > "$REPETE_DIR/handoff.md"
     set_fm status summarizing
     HANDOFF_REINJECT='--- repete context checkpoint: write a handoff snapshot, then STOP ---
 The context budget is reached and this conversation is about to be /clear-ed. Capture the in-flight state that is NOT yet on disk so the next session resumes losslessly.
