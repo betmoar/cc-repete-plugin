@@ -241,6 +241,15 @@ fi
 if [[ "$STATUS" == "summarizing" ]]; then
   set_fm status running
   STATUS=running
+  # The max-iterations yield above was skipped because status was 'summarizing'.
+  # Now that we've returned to 'running', re-apply it here so a cap reached
+  # during the handoff is still enforced on THIS Stop — otherwise the loop would
+  # run one cycle past the configured cap before the next Stop catches it.
+  if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
+    set_fm status paused-max
+    emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
+    exit 0
+  fi
 fi
 
 # ---- (3) autonomous continue: block + re-inject --------------------------
