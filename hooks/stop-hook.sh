@@ -212,6 +212,15 @@ Write durable facts to their normal homes too if not already there (loop body, .
   fi
 fi
 
+# Recover from a stranded 'summarizing': every budget yield above exits, so
+# reaching here means we are NOT over budget (raised cap, shrunk transcript, or
+# budget disabled). Clear the transient status so we don't take the pass-2
+# paused-context path on a future trip without first writing a fresh handoff.
+if [[ "$STATUS" == "summarizing" ]]; then
+  set_fm status running
+  STATUS=running
+fi
+
 # ---- (3) autonomous continue: block + re-inject --------------------------
 NEXT=$((ITERATION + 1))
 set_fm iteration "$NEXT"
