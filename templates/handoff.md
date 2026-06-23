@@ -7,10 +7,11 @@
   state that is NOT yet on disk survives the wipe. The agent overwrites this
   file each cycle; you normally never edit it by hand.
 
-  Keep it tight — under ~30 lines. This captures the DELTA not already in the
-  loop body / todo-next / lessons / commits; it is not a place to re-summarize
-  durable facts (those get re-read losslessly on rehydrate). Fill the four
-  sections below.
+  Keep the filled snapshot tight — aim for ~30 lines once written (this
+  instructional comment is overwritten when you fill it, so it doesn't count).
+  Capture the DELTA not already in the loop body / todo-next / lessons /
+  commits; it is not a place to re-summarize durable facts (those get re-read
+  losslessly on rehydrate). Fill the four sections below.
 -->
 
 ## Done this stretch

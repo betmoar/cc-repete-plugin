@@ -186,7 +186,11 @@ if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   if [[ "${LINES:-0}" -gt "$CTX_BUDGET" ]]; then
     if [[ "$STATUS" == "summarizing" ]]; then
       set_fm status paused-context
-      emit "🧹 repete: context budget (${CTX_BUDGET} lines) exceeded; handoff snapshot saved to .repete/handoff.md. Run /clear, then /repete-continue to resume this loop with a fresh context rehydrated from .repete/."
+      if [[ -s "$REPETE_DIR/handoff.md" ]]; then
+        emit "🧹 repete: context budget (${CTX_BUDGET} lines) exceeded; handoff snapshot saved to .repete/handoff.md. Run /clear, then /repete-continue to resume this loop with a fresh context rehydrated from .repete/."
+      else
+        emit "⚠️ repete: context budget (${CTX_BUDGET} lines) exceeded but .repete/handoff.md is missing or empty — the in-flight delta was NOT captured. You can still /clear then /repete-continue (rehydrate falls back to committed state, git, and the loop body), but expect to re-derive whatever was only in the cleared conversation."
+      fi
       exit 0
     fi
     # pass 1: do NOT bump iteration (the snapshot turn is free) and re-inject a
