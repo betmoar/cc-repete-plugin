@@ -295,6 +295,8 @@ fi
 # Read the shipped protocol template; fall back to an inline core if it is
 # unreadable (missing/botched install). Fail-functional: the loop must never
 # lose its two sentinels, matching the fail-open-on-missing-jq philosophy.
+# shellcheck disable=SC2016  # ${PHASE}/${NEXT} are literal placeholder tokens,
+# substituted below — they must NOT expand here (single quotes are deliberate).
 PROTO_FALLBACK='
 --- repete standing rules (phase ${PHASE} · iteration ${NEXT}) ---
 - Work from files and git, not from memory in this conversation.
@@ -306,7 +308,10 @@ PROTO_FALLBACK='
 PROTO=""
 [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && PROTO="$(cat "${CLAUDE_PLUGIN_ROOT}/templates/protocol.md" 2>/dev/null)"
 [[ -n "$PROTO" ]] || PROTO="$PROTO_FALLBACK"
+# shellcheck disable=SC2016  # single quotes make the search PATTERN the literal
+# token '${PHASE}'/'${NEXT}'; this is the substitution, expanding it would break it.
 PROTO="${PROTO//'${PHASE}'/$PHASE}"
+# shellcheck disable=SC2016  # literal-token search pattern, see above.
 PROTO="${PROTO//'${NEXT}'/$NEXT}"
 
 # --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
