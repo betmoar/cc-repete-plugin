@@ -29,6 +29,8 @@ The previous loop hit its exit goal and proposed a next payload in `.repete/tran
    - `iteration` → 1
    - `status` → running
    - `active` → true
+   - `session_id` → `""` (see the note under *Resuming from a new session* below — if you are
+     continuing in a fresh chat, blanking this is what keeps the loop alive)
    Clear `.repete/transition.md` (truncate it).
 5. Begin working the new loop's exit goal immediately, same rules as before.
 
@@ -50,19 +52,30 @@ from externalized state ONLY — do not rely on conversation memory:
 2. Give the user a 5-line situation report: mission, current loop's exit goal, what's done,
    what's pending (lead with the handoff's "next concrete step"), last commits.
 3. Update frontmatter atomically: `status` → running (leave `phase`/`iteration` as-is) and
-   `session_id` → `""`. Blanking `session_id` lets the Stop hook re-stamp it to THIS
-   post-`/clear` session on the next Stop; without it the hook's session-isolation guard can
-   ignore the resumed session and the loop looks dead. Then resume working this loop's exit
-   goal. The hook will pick the loop back up on your next Stop.
+   `session_id` → `""` (mandatory here — you have just `/clear`-ed; see *Resuming from a new
+   session* below for why). Then resume working this loop's exit goal. The hook will pick the
+   loop back up on your next Stop.
 
 ## status: paused-max — the iteration cap tripped
 
 Tell the user how many iterations ran and what's still incomplete. Ask whether to (a) raise
-`max_iterations` and resume (set it higher, `status` → running, continue), or (b) treat the
-current state as a checkpoint and `/repete-cancel`. Do what they choose.
+`max_iterations` and resume (set it higher, `status` → running, blank `session_id` per the note
+below, continue), or (b) treat the current state as a checkpoint and `/repete-cancel`. Do what
+they choose.
 
 ## status: running or active:false / no loop
 
 If `active:false` or no `.repete/loop.local.md`: tell the user there is no paused loop;
 suggest `/repete` to start one or `/repete-status`. If `status: running`, the loop is live —
 nothing to continue; suggest `/repete-status`.
+
+## Resuming from a new session — always blank `session_id`
+
+Whenever you set `status` → running from *any* paused state, also set `session_id` → `""` if
+there's any chance you're continuing in a different session than the one that started the loop
+(a fresh chat, a post-`/clear` window, a new day). The Stop hook stamps `session_id` on first
+sight and then ignores Stops from any other session (isolation guard) — so a stale id from the
+old session makes the hook silently skip the resumed one and the loop looks dead. Blanking it
+lets the hook re-stamp the current session on the next Stop. It's mandatory after `paused-context`
+(you've just `/clear`-ed) and the safe default for every other resume; harmless when you happen
+to be in the original session.

@@ -28,8 +28,10 @@ only for what is genuinely missing:
 - **Constraints** — don't-touch dirs, no push, keep API stable, etc.
 - **Budgets** — `max_iterations` (0 = uncapped; warn if so) and `context_budget_lines`
   (default 2500 — counts raw transcript JSONL lines, a loose proxy for context size,
-  not tokens; when the transcript passes this the loop pauses for a `/clear` +
-  `/repete-continue` rehydrate). Suggest defaults; only confirm if the user cares.
+  not tokens; when the transcript passes this the hook first spends one turn writing a
+  handoff snapshot to `.repete/handoff.md` (transient `summarizing` status), then pauses
+  for a `/clear` + `/repete-continue` rehydrate that reads the handoff first). Suggest
+  defaults; only confirm if the user cares.
 
 If the mission is genuinely ambiguous, ask 2–4 sharp questions, then proceed. If it is
 already clear from `$ARGUMENTS`, restate your understanding in two lines and continue.
