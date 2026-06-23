@@ -1,6 +1,6 @@
 {
   "name": "cc-repete",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Self-evolving autonomous loops for Claude Code. Ralph-style iteration with an evolving payload, TODO_NEXT harvesting, human-gated transitions, context-rot checkpoints, and a project lesson library. Reuses the remember plugin for memory.",
   "author": {
     "name": "redux"
