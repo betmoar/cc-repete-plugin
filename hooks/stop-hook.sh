@@ -146,6 +146,12 @@ norm() { printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'; }
 HAS_CHECKPOINT=0
 printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'exit(/<repete-checkpoint>.*?<\/repete-checkpoint>/s ? 0 : 1)' && HAS_CHECKPOINT=1
 
+# While 'summarizing' (the pass-1 handoff turn), the agent was told NOT to emit
+# any sentinel; if it does so by accident, the pass-2 budget yield below must
+# still win — otherwise a stray <repete-checkpoint>/<repete-done> would divert
+# the loop out of the /clear flow. Suppress sentinel handling in this state.
+if [[ "$STATUS" != "summarizing" ]]; then
+
 # ---- (1) mission done? ----------------------------------------------------
 if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]]; then
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
@@ -165,6 +171,8 @@ if [[ $HAS_CHECKPOINT -eq 1 ]]; then
   emit "⏸ repete checkpoint (phase ${PHASE}, iteration ${ITERATION}). Proposed next payload → .repete/transition.md. Review/edit it, then /repete-continue to launch the next loop, or /repete-cancel to stop."
   exit 0
 fi
+
+fi  # end: sentinel handling suppressed while 'summarizing'
 
 # ---- safety yield: max iterations ----------------------------------------
 # iteration counts completed work turns: with max_iterations=3, turns 1,2,3 run,
