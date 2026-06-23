@@ -35,12 +35,14 @@ The previous loop hit its exit goal and proposed a next payload in `.repete/tran
 ## status: paused-context — you just /clear-ed, rehydrate and resume
 
 The loop paused because the transcript crossed `context_budget_lines`. Before pausing, the
-hook had you write a handoff snapshot of in-flight state to `.repete/handoff.md`. The user
-has (or should have) run `/clear`. Rebuild a fresh working context from externalized state
-ONLY — do not rely on conversation memory:
+hook had you write a handoff snapshot of in-flight state to `.repete/handoff.md` — though it
+may be absent or empty if that write failed (the hook emits a warning in that case) or if this
+is an older loop. The user has (or should have) run `/clear`. Rebuild a fresh working context
+from externalized state ONLY — do not rely on conversation memory:
 
 1. Read, in order: `.repete/handoff.md` (the previous session's in-flight snapshot — done /
-   in-flight / next step / open questions; may be absent if this is an older loop),
+   in-flight / next step / open questions; may be absent/empty per above, in which case rely on
+   the durable state below),
    `.repete/MISSION.md`, the body of `.repete/loop.local.md`, `.repete/constitution.md`
    (the user's hard invariants), `.repete/todo-next.md`, the relevant cards in
    `.repete/lessons/`, and `git log --oneline -15`. If the `remember` plugin is active, also

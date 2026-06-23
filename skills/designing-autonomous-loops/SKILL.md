@@ -148,7 +148,9 @@ simply "don't bury the must-follow rules.")
 5. **Set the rot valve.** Plan to rehydrate-from-disk in the ~30–50K-token band, earlier if
    dead-ends are piling up. Lossless re-read, never summarize-and-continue — but do snapshot
    the uncommitted in-flight delta to disk right before the reset, so the clean restart is
-   lossless rather than merely clean.
+   lossless rather than merely clean. Treat that snapshot as best-effort: when the write lands
+   the restart is lossless; if it doesn't, the durable on-disk state still gives a clean restart
+   — which is why you externalize progress every iteration, not just at the reset.
 6. **Mitigation is soft on a hook spine.** Single-session leans on prompt rules + the human at
    checkpoints; if the real workload drifts to unsupervised hundreds-of-K runs, that's the
    signal to graduate to a fresh-process runner — a decision to make on your own measured

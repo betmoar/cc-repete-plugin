@@ -176,11 +176,14 @@ if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
 fi
 
 # ---- safety yield: context budget (rot-as-checkpoint) --------------------
-# Two steps so the restart is LOSSLESS: the conversation /clear discards any
+# Two steps so the restart can be lossless: the conversation /clear discards any
 # in-flight state not yet on disk, so before yielding we spend ONE re-inject
-# turn having the agent snapshot that delta to .repete/handoff.md.
-#   pass 1 (status running)     -> mark 'summarizing', block + ask for handoff
-#   pass 2 (status summarizing) -> handoff written, yield for /clear
+# turn having the agent snapshot that delta to .repete/handoff.md. The restart
+# is lossless only if that snapshot is actually written — pass 2 verifies it and
+# warns if it's missing/empty, in which case rehydrate falls back to durable
+# on-disk state (committed work, git, loop body).
+#   pass 1 (any non-'summarizing' status) -> mark 'summarizing', block + ask for handoff
+#   pass 2 (status 'summarizing')         -> verify handoff, yield for /clear
 if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   LINES="$(wc -l < "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
   if [[ "${LINES:-0}" -gt "$CTX_BUDGET" ]]; then
