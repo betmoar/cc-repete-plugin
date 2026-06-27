@@ -45,6 +45,23 @@ ck "lessons catalog present"  'printf "%s" "$OUT" | jq -r .reason | grep -q "Kno
 ck "todo-next rule present"   'printf "%s" "$OUT" | jq -r .reason | grep -q "todo-next.md"'
 ck "lesson-card rule present" 'printf "%s" "$OUT" | jq -r .reason | grep -q "write a lesson card"'
 
+echo "== Garbage flag value -> fail-open to OFF =="
+scaffold $'lessons_enabled: yes\ntodo_next_enabled: 1'   # non-"true" -> must be treated as off
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "garbage lessons_enabled stays quiet" '! printf "%s" "$OUT" | jq -r .reason | grep -q "Known lessons"'
+ck "garbage todo_next_enabled stays quiet" '! printf "%s" "$OUT" | jq -r .reason | grep -q "todo-next.md"'
+
+echo "== PROTO_FALLBACK still carries the done sentinel (template unreadable) =="
+# Point CLAUDE_PLUGIN_ROOT at a dir with no templates/protocol.md so the hook takes
+# the inline PROTO_FALLBACK path; it must still inject <repete-done>.
+scaffold ""
+mktx "did some work"
+OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$TMP/noplugin" bash "$H")"
+ck "fallback carries done sentinel" 'printf "%s" "$OUT" | jq -r .reason | grep -q "<repete-done>"'
+ck "fallback + gated still gets checkpoint rule (from RULES_EXTRA)" 'printf "%s" "$OUT" | jq -r .reason | grep -q "<repete-checkpoint>"'
+
 echo "== Autonomous: checkpoint is ignored, loop continues =="
 scaffold 'autonomous: true'
 mktx "done slice <repete-checkpoint>next: do part 2</repete-checkpoint>"

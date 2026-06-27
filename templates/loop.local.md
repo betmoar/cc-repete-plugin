@@ -30,7 +30,9 @@ started_at: ""
 
 ## Known traps
 
-The hook injects a lessons **catalog** (slug · tags · severity · hits) into every
-iteration automatically. Consult it and `Read` only the relevant `.repete/lessons/`
-cards on demand — do not paste card contents here. This section stays a pointer; it
-must never hold card bodies (that would re-inject them every iteration).
+When `lessons_enabled: true`, the hook injects a lessons **catalog** (slug · tags ·
+severity · hits) into every iteration automatically; consult it and `Read` only the
+relevant `.repete/lessons/` cards on demand. When lessons are off (the default) no
+catalog is injected and this section is inert. Either way, do not paste card contents
+here — this section stays a pointer; it must never hold card bodies (that would
+re-inject them every iteration).

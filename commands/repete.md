@@ -59,6 +59,16 @@ Create, in the project root:
   `todo_next_enabled: true`**. Otherwise skip it.
 - `.repete/lessons/` — create the directory and copy `${CLAUDE_PLUGIN_ROOT}/templates/lesson-card.md`
   to `.repete/lessons/_TEMPLATE.md`, **only if `lessons_enabled: true`**. Otherwise skip it.
+- `.repete/constitution.md` — copy from `${CLAUDE_PLUGIN_ROOT}/templates/constitution.md`.
+  This is the user's hard-invariants layer, re-injected each iteration. After copying the
+  commented starter, ask the user (once, briefly) whether they have hard invariants to seed
+  it (don't-touch dirs, the test command, API-stability, no-push, etc.). If they name any,
+  write them in as imperative one-liners and delete the comment block so it activates. If
+  they have none, leave the starter as-is (it stays inert until filled). Do NOT force this as
+  a blocking prompt — offer it and move on.
+
+If `.repete/loop.local.md` already exists and is `active: true`, STOP and tell the user a
+loop is already running (offer `/repete-status` or `/repete-cancel`).
 
 ### Optional features (default OFF — keep the loop quiet)
 
@@ -74,19 +84,12 @@ the user wants what they add:
 - **`autonomous`** — when `true`, the loop runs *past* its per-loop exit goal toward the
   mission without pausing for `/repete-continue` at each checkpoint; only `<repete-done>` and
   `max_iterations` stop it. Offer it only for an unsupervised run with a **coarse** exit goal.
-  Note the limit: a Stop hook cannot `/clear` itself, so an autonomous loop still pauses at the
-  `context_budget_lines` boundary for a human `/clear` — autonomy removes the *checkpoint* gate,
-  not the *context* gate.
-- `.repete/constitution.md` — copy from `${CLAUDE_PLUGIN_ROOT}/templates/constitution.md`.
-  This is the user's hard-invariants layer, re-injected each iteration. After copying the
-  commented starter, ask the user (once, briefly) whether they have hard invariants to seed
-  it (don't-touch dirs, the test command, API-stability, no-push, etc.). If they name any,
-  write them in as imperative one-liners and delete the comment block so it activates. If
-  they have none, leave the starter as-is (it stays inert until filled). Do NOT force this as
-  a blocking prompt — offer it and move on.
-
-If `.repete/loop.local.md` already exists and is `active: true`, STOP and tell the user a
-loop is already running (offer `/repete-status` or `/repete-cancel`).
+  **Pair it with a non-zero `max_iterations`** — `autonomous` + `max_iterations: 0` (the
+  template default) has no checkpoint backstop, so the only stops are `<repete-done>` and the
+  context-budget pause; set a cap so a stuck loop can't grind indefinitely.
+  Note the other limit: a Stop hook cannot `/clear` itself, so an autonomous loop still pauses
+  at the `context_budget_lines` boundary for a human `/clear` — autonomy removes the
+  *checkpoint* gate, not the *context* gate.
 
 ## 3. Confirm, then begin
 
