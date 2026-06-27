@@ -86,7 +86,10 @@ the user wants what they add:
   `max_iterations` stop it. Offer it only for an unsupervised run with a **coarse** exit goal.
   **Pair it with a non-zero `max_iterations`** — `autonomous` + `max_iterations: 0` (the
   template default) has no checkpoint backstop, so the only stops are `<repete-done>` and the
-  context-budget pause; set a cap so a stuck loop can't grind indefinitely.
+  context-budget pause; set a cap so a stuck loop can't grind indefinitely. As a last resort
+  the Stop hook self-heals this trap: if `autonomous: true` runs with **both** `max_iterations`
+  and `context_budget_lines` at 0, it stamps a safety `max_iterations: 25` into state and warns
+  once — so a stuck mission can never block Stop forever. Set your own cap to override it.
   Note the other limit: a Stop hook cannot `/clear` itself, so an autonomous loop still pauses
   at the `context_budget_lines` boundary for a human `/clear` — autonomy removes the
   *checkpoint* gate, not the *context* gate.

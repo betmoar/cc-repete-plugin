@@ -9,7 +9,11 @@
 # env/PWD fallbacks for when jq is absent or the field is missing.
 set -uo pipefail
 
-IN="$(cat)"
+# Drain stdin only when it's a pipe; a TTY stdin (segment run manually, or a host
+# that forgets to close it) would block `cat` forever. Either way we fall back to
+# env/PWD below, so a terminal just means "no JSON".
+IN=""
+[[ -t 0 ]] || IN="$(cat)"
 
 PROJ=""
 if command -v jq >/dev/null 2>&1; then

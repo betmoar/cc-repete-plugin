@@ -135,6 +135,21 @@ LESSONS_ENABLED="$(fm lessons_enabled)";     [[ "$LESSONS_ENABLED" == "true" ]] 
 TODO_NEXT_ENABLED="$(fm todo_next_enabled)"; [[ "$TODO_NEXT_ENABLED" == "true" ]] || TODO_NEXT_ENABLED=false
 AUTONOMOUS="$(fm autonomous)";               [[ "$AUTONOMOUS" == "true" ]]        || AUTONOMOUS=false
 
+# ---- autonomous safety backstop ------------------------------------------
+# Autonomous loops force HAS_CHECKPOINT=0 (below), so the per-loop checkpoint
+# can't pause them — only <repete-done>, max_iterations, and the context budget
+# can. If BOTH numeric budgets are disabled (0), a buggy/unreachable mission
+# goal would block Stop forever with no out-of-band escape. Refuse that trap:
+# stamp a conservative iteration cap into state (visible to statusline and
+# /repete-status), and tell the user once. They can raise or clear it.
+AUTO_CAP_DEFAULT=25
+AUTO_CAP_APPLIED=0
+if [[ "$AUTONOMOUS" == "true" && "$MAX_ITER" -eq 0 && "$CTX_BUDGET" -eq 0 ]]; then
+  MAX_ITER="$AUTO_CAP_DEFAULT"
+  set_fm max_iterations "$MAX_ITER"
+  AUTO_CAP_APPLIED=1
+fi
+
 # ---- last assistant message ----------------------------------------------
 TRANSCRIPT="$(printf '%s' "$HOOK_INPUT" | jq -r '.transcript_path // ""')"
 LAST_OUTPUT=""
@@ -369,6 +384,10 @@ REINJECT="$PAYLOAD_BODY"
 [[ -n "$CONSTITUTION" ]] && REINJECT+=$'\n\n--- project invariants (.repete/constitution.md) ---\n'"$CONSTITUTION"
 REINJECT+=$'\n'"$PROTO"
 
-jq -n --arg r "$REINJECT" --arg m "🔄 repete · phase ${PHASE} · iteration ${NEXT}" \
+SYSMSG="🔄 repete · phase ${PHASE} · iteration ${NEXT}"
+if [[ "$AUTO_CAP_APPLIED" -eq 1 ]]; then
+  SYSMSG+=$'\n🛟 repete: autonomous loop had no cap and no context budget — applied a safety max_iterations='"${AUTO_CAP_DEFAULT}"$' so a stuck mission can'"'"'t block Stop forever. Edit .repete/loop.local.md to raise or change it.'
+fi
+jq -n --arg r "$REINJECT" --arg m "$SYSMSG" \
   '{decision:"block", reason:$r, systemMessage:$m}'
 exit 0

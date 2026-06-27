@@ -83,6 +83,19 @@ mktx "<repete-done>all tests pass</repete-done>"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "autonomous done tears loop down" 'grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
 
+echo "== Autonomous + both budgets 0: hook stamps a safety cap (no infinite trap) =="
+scaffold 'autonomous: true'   # scaffold defaults max_iterations:0, context_budget_lines:0
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "backstop stamps max_iterations=25" 'grep -qE "^max_iterations: 25" "$TMP/.repete/loop.local.md"'
+ck "backstop warns once in systemMessage" 'printf "%s" "$OUT" | jq -r .systemMessage | grep -q "safety max_iterations=25"'
+ck "still re-injects this turn (block)"   'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+# The "WITH a cap" / "context budget set" backstop cases live below, after the
+# setstate helper — scaffold only appends keys (it can't override the default
+# max_iterations:0 / context_budget_lines:0 it already wrote), so those cases
+# must mutate the existing key with setstate instead of duplicating it.
+
 # Helper: update one frontmatter key in the test state file (mirrors the hook's set_fm).
 setstate(){ # key value
   local tmp="$TMP/.repete/loop.local.md.tmp.$$"
@@ -92,6 +105,22 @@ setstate(){ # key value
     { print }
   ' "$TMP/.repete/loop.local.md" > "$tmp" && mv "$tmp" "$TMP/.repete/loop.local.md"
 }
+
+echo "== Autonomous WITH a cap: backstop does not override it =="
+scaffold 'autonomous: true'
+setstate max_iterations 5      # mutate the existing key, don't append a dup
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "user cap preserved (5, not 25)" 'grep -qE "^max_iterations: 5" "$TMP/.repete/loop.local.md"'
+ck "no backstop warning when capped" '! printf "%s" "$OUT" | jq -r .systemMessage | grep -q "safety max_iterations"'
+
+echo "== Autonomous + context budget set: no cap forced =="
+scaffold 'autonomous: true'
+setstate context_budget_lines 50
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "context budget counts as a yield (max stays 0)" 'grep -qE "^max_iterations: 0" "$TMP/.repete/loop.local.md"'
+ck "no backstop warning when budget set" '! printf "%s" "$OUT" | jq -r .systemMessage | grep -q "safety max_iterations"'
 
 echo "== Session isolation: known session, different Stop session is ignored =="
 scaffold ""
