@@ -11,8 +11,9 @@ both off by default so a bare loop stays quiet. It reuses the
 [`remember`](https://github.com/anthropics/claude-code) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.1.1** — a single evolving loop with project-local lessons. Multi-phase mission
-chaining (v2) and cross-project global learning (v3) build on the same state model.
+This is **v0.1.3** — a single evolving loop with opt-in autonomous mode and opt-in project-local
+lessons. Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
+same state model.
 
 ## How it works
 
