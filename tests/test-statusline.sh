@@ -35,6 +35,20 @@ ck "shows rp[4] when max blank" '[ "$OUT" = "rp[4]" ]'
 ERR="$(run 2>&1 >/dev/null)"
 ck "no stderr noise when max blank" '[ -z "$ERR" ]'
 
+echo "== Reads project .repete, not CLAUDE_PLUGIN_ROOT (regression guard) =="
+# State lives ONLY under the project dir; CLAUDE_PLUGIN_ROOT points elsewhere.
+# The pre-fix script read \$CLAUDE_PLUGIN_ROOT/.repete and would emit nothing here.
+mkstate true 2 5
+OUT="$(printf '{"workspace":{"project_dir":"%s"}}' "$TMP" \
+       | CLAUDE_PLUGIN_ROOT="$TMP/nonexistent-plugin-root" CLAUDE_PROJECT_DIR="$TMP" bash "$SEG")"
+ck "shows rp[2/5] from project dir" '[ "$OUT" = "rp[2/5]" ]'
+
+echo "== No-jq fallback resolves via CLAUDE_PROJECT_DIR =="
+# Empty stdin (no project_dir field) -> must fall back to the env var.
+mkstate true 1 0
+OUT="$(printf '{}' | CLAUDE_PROJECT_DIR="$TMP" bash "$SEG")"
+ck "shows rp[1] via env fallback" '[ "$OUT" = "rp[1]" ]'
+
 echo "== Inactive loop: emits nothing =="
 mkstate false 3 10
 OUT="$(run)"
