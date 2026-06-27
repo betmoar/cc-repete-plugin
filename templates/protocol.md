@@ -1,4 +1,3 @@
-
 --- repete standing rules (phase ${PHASE} · iteration ${NEXT}) ---
 - Re-read .repete/MISSION.md BEFORE acting. Work from files and git, not from memory in this conversation.
 - .repete/constitution.md holds the user's hard invariants for this project. Treat it as authoritative; never violate it to make progress.

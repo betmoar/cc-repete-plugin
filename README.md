@@ -8,7 +8,7 @@ that **evolves its own payload** at each human-gated checkpoint (or runs unatten
 `/clear` + rehydrate checkpoint. Opt-in layers let it **harvest out-of-scope discoveries**
 as the seed for the next loop and **learn from its mistakes** into a project lesson library —
 both off by default so a bare loop stays quiet. It reuses the
-[`remember`](https://github.com/anthropics/claude-code) plugin for tiered memory rather than
+[`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
 reinventing it.
 
 This is **v0.1.3** — a single evolving loop with opt-in autonomous mode and opt-in project-local

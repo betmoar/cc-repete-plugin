@@ -1,0 +1,5 @@
+{
+  "name": "repete",
+  "render": "statusline/repete.sh",
+  "order": 50
+}
