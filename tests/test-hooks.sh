@@ -45,4 +45,25 @@ ck "lessons catalog present"  'printf "%s" "$OUT" | jq -r .reason | grep -q "Kno
 ck "todo-next rule present"   'printf "%s" "$OUT" | jq -r .reason | grep -q "todo-next.md"'
 ck "lesson-card rule present" 'printf "%s" "$OUT" | jq -r .reason | grep -q "write a lesson card"'
 
+echo "== Autonomous: checkpoint is ignored, loop continues =="
+scaffold 'autonomous: true'
+mktx "done slice <repete-checkpoint>next: do part 2</repete-checkpoint>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "autonomous re-injects (block)"      'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+ck "autonomous writes no transition"    '[ ! -s "$TMP/.repete/transition.md" ]'
+ck "autonomous stays running"           'grep -qE "^status: running" "$TMP/.repete/loop.local.md"'
+
+echo "== Gated (default): same checkpoint pauses =="
+scaffold ''     # autonomous default false
+mktx "done slice <repete-checkpoint>next: do part 2</repete-checkpoint>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "gated writes transition.md"   '[ -s "$TMP/.repete/transition.md" ]'
+ck "gated sets paused-checkpoint" 'grep -qE "^status: paused-checkpoint" "$TMP/.repete/loop.local.md"'
+
+echo "== Autonomous: mission-done still wins =="
+scaffold 'autonomous: true'
+mktx "<repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "autonomous done tears loop down" 'grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
+
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

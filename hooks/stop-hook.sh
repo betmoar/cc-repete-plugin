@@ -153,6 +153,11 @@ norm() { printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'; }
 HAS_CHECKPOINT=0
 printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'exit(/<repete-checkpoint>.*?<\/repete-checkpoint>/s ? 0 : 1)' && HAS_CHECKPOINT=1
 
+# Autonomous loops never yield at a sub-goal: treat any checkpoint sentinel as
+# absent so the done-check and re-inject below run normally. Only <repete-done>
+# and the iteration cap stop an autonomous loop.
+[[ "$AUTONOMOUS" == "true" ]] && HAS_CHECKPOINT=0
+
 # While 'summarizing' (the pass-1 handoff turn), the agent was told NOT to emit
 # any sentinel; if it does so by accident, the pass-2 budget yield below must
 # still win — otherwise a stray <repete-checkpoint>/<repete-done> would divert
