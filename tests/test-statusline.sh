@@ -13,7 +13,10 @@ mkstate(){  # active iter max
   printf -- '---\nactive: %s\niteration: %s\nmax_iterations: %s\n---\n' "$1" "$2" "$3" \
     > "$TMP/.repete/loop.local.md"
 }
-run(){ printf '{}' | CLAUDE_PLUGIN_ROOT="$TMP" bash "$SEG"; }
+# The segment resolves the project dir from stdin (.workspace.project_dir),
+# matching the Stop hook's CLAUDE_PROJECT_DIR:-$PWD view. Feed it that path and
+# also export CLAUDE_PROJECT_DIR so the no-jq fallback resolves to TMP too.
+run(){ printf '{"workspace":{"project_dir":"%s"}}' "$TMP" | CLAUDE_PROJECT_DIR="$TMP" bash "$SEG"; }
 
 echo "== Active loop with cap: shows rp[iter/max] =="
 mkstate true 3 10
@@ -24,6 +27,13 @@ echo "== Active loop uncapped (max=0): shows rp[iter] =="
 mkstate true 7 0
 OUT="$(run)"
 ck "shows rp[7]" '[ "$OUT" = "rp[7]" ]'
+
+echo "== Non-numeric max: falls back to rp[iter], no error noise =="
+mkstate true 4 ""
+OUT="$(run 2>/dev/null)"
+ck "shows rp[4] when max blank" '[ "$OUT" = "rp[4]" ]'
+ERR="$(run 2>&1 >/dev/null)"
+ck "no stderr noise when max blank" '[ -z "$ERR" ]'
 
 echo "== Inactive loop: emits nothing =="
 mkstate false 3 10
