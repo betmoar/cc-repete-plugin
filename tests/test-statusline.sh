@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# cc-repete statusline segment tests. Run from anywhere: bash tests/test-statusline.sh
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SEG="$ROOT/statusline/repete.sh"
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+pass=0; fail=0
+ck(){ if eval "$2"; then echo "  PASS: $1"; pass=$((pass+1)); else echo "  FAIL: $1"; fail=$((fail+1)); fi; }
+
+# Write a minimal loop.local.md into TMP/.repete/
+mkstate(){  # active iter max
+  mkdir -p "$TMP/.repete"
+  printf -- '---\nactive: %s\niteration: %s\nmax_iterations: %s\n---\n' "$1" "$2" "$3" \
+    > "$TMP/.repete/loop.local.md"
+}
+run(){ printf '{}' | CLAUDE_PLUGIN_ROOT="$TMP" bash "$SEG"; }
+
+echo "== Active loop with cap: shows rp[iter/max] =="
+mkstate true 3 10
+OUT="$(run)"
+ck "shows rp[3/10]" '[ "$OUT" = "rp[3/10]" ]'
+
+echo "== Active loop uncapped (max=0): shows rp[iter] =="
+mkstate true 7 0
+OUT="$(run)"
+ck "shows rp[7]" '[ "$OUT" = "rp[7]" ]'
+
+echo "== Inactive loop: emits nothing =="
+mkstate false 3 10
+OUT="$(run)"
+ck "empty output when inactive" '[ -z "$OUT" ]'
+
+echo "== Missing state file: emits nothing =="
+rm -f "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "empty output when no state file" '[ -z "$OUT" ]'
+
+echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]
