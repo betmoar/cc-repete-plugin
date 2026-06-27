@@ -48,13 +48,35 @@ Create, in the project root:
   - `mission_goal`: the EXACT goal string, identical to `GOAL:` in MISSION.md.
   - `max_iterations`, `context_budget_lines`: as agreed.
   - `lesson_catalog_cap`: max lesson lines surfaced in the catalog each iteration
-    (default 8; 0 = uncapped — only for small projects).
+    (default 8; 0 = uncapped — only for small projects). Only relevant when
+    `lessons_enabled: true`.
+  - `lessons_enabled`, `todo_next_enabled`, `autonomous`: all default `false`. See
+    *Optional features* below before changing them.
   - `started_at`: output of `date -u +%Y-%m-%dT%H:%M:%SZ`.
   - `status: running`, `active: true`, `phase: 1`, `iteration: 1`.
   Fill the body with this loop's exit goal + working brief.
-- `.repete/todo-next.md` — create with a one-line header and nothing else.
-- `.repete/lessons/` — create the directory. Copy `${CLAUDE_PLUGIN_ROOT}/templates/lesson-card.md`
-  to `.repete/lessons/_TEMPLATE.md` so the format is on hand.
+- `.repete/todo-next.md` — create with a one-line header and nothing else, **only if
+  `todo_next_enabled: true`**. Otherwise skip it.
+- `.repete/lessons/` — create the directory and copy `${CLAUDE_PLUGIN_ROOT}/templates/lesson-card.md`
+  to `.repete/lessons/_TEMPLATE.md`, **only if `lessons_enabled: true`**. Otherwise skip it.
+
+### Optional features (default OFF — keep the loop quiet)
+
+Three frontmatter flags gate behavior that is off by default. Don't enable them unless
+the user wants what they add:
+
+- **`lessons_enabled`** / **`todo_next_enabled`** — each adds a per-iteration journaling
+  instruction (write a lesson card on every dead-end; log out-of-scope finds to
+  `todo-next.md`). Useful for a long mission that should build a reusable lesson library or
+  TODO harvest; pure noise for a short, focused loop. Offer once, briefly: "Enable lessons /
+  todo-next for this run?" Enable only the ones the user wants; create the matching files
+  (above) only when enabled.
+- **`autonomous`** — when `true`, the loop runs *past* its per-loop exit goal toward the
+  mission without pausing for `/repete-continue` at each checkpoint; only `<repete-done>` and
+  `max_iterations` stop it. Offer it only for an unsupervised run with a **coarse** exit goal.
+  Note the limit: a Stop hook cannot `/clear` itself, so an autonomous loop still pauses at the
+  `context_budget_lines` boundary for a human `/clear` — autonomy removes the *checkpoint* gate,
+  not the *context* gate.
 - `.repete/constitution.md` — copy from `${CLAUDE_PLUGIN_ROOT}/templates/constitution.md`.
   This is the user's hard-invariants layer, re-injected each iteration. After copying the
   commented starter, ask the user (once, briefly) whether they have hard invariants to seed
@@ -68,12 +90,15 @@ loop is already running (offer `/repete-status` or `/repete-cancel`).
 
 ## 3. Confirm, then begin
 
-Print a 4-line summary: mission goal, this loop's exit goal, budgets, and the two exit
-signals (`<repete-checkpoint>` for a loop boundary, `<repete-done>` for the mission).
-Remind the user this loop will auto-continue on each Stop until one of those fires or a
+Print a 4-line summary: mission goal, this loop's exit goal, budgets, and the exit
+signals — `<repete-done>` for the mission, plus (in the default gated mode)
+`<repete-checkpoint>` for a loop boundary. Note which optional features are on.
+Remind the user this loop will auto-continue on each Stop until a sentinel fires or a
 budget is hit.
 
 Then **start working on this loop's exit goal immediately.** Re-read `.repete/MISSION.md`
-and any seeded lessons first. Log out-of-scope finds to `.repete/todo-next.md`. When this
-loop's exit goal is met, emit a `<repete-checkpoint>` block with your proposed next-loop
-payload and stop — do not declare the mission done unless its goal is verifiably true.
+first (and any seeded lessons, if `lessons_enabled`). If `todo_next_enabled`, log
+out-of-scope finds to `.repete/todo-next.md`. In the default **gated** mode, when this loop's
+exit goal is met, emit a `<repete-checkpoint>` block with your proposed next-loop payload and
+stop; in **autonomous** mode keep working toward the mission instead. Either way, do not
+declare the mission done unless its goal is verifiably true.
