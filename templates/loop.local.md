@@ -6,6 +6,9 @@ session_id: ""
 max_iterations: 0
 context_budget_lines: 2500
 lesson_catalog_cap: 8
+lessons_enabled: false
+todo_next_enabled: false
+autonomous: false
 mission_goal: ""
 status: running
 started_at: ""

@@ -131,6 +131,9 @@ PHASE="$(fm phase)";         [[ "$PHASE" =~ ^[0-9]+$ ]]     || PHASE=1
 MAX_ITER="$(fm max_iterations)";        [[ "$MAX_ITER" =~ ^[0-9]+$ ]]   || MAX_ITER=0
 CTX_BUDGET="$(fm context_budget_lines)";[[ "$CTX_BUDGET" =~ ^[0-9]+$ ]] || CTX_BUDGET=0
 MISSION_GOAL="$(fm mission_goal)"
+LESSONS_ENABLED="$(fm lessons_enabled)";     [[ "$LESSONS_ENABLED" == "true" ]]   || LESSONS_ENABLED=false
+TODO_NEXT_ENABLED="$(fm todo_next_enabled)"; [[ "$TODO_NEXT_ENABLED" == "true" ]] || TODO_NEXT_ENABLED=false
+AUTONOMOUS="$(fm autonomous)";               [[ "$AUTONOMOUS" == "true" ]]        || AUTONOMOUS=false
 
 # ---- last assistant message ----------------------------------------------
 TRANSCRIPT="$(printf '%s' "$HOOK_INPUT" | jq -r '.transcript_path // ""')"
@@ -283,8 +286,11 @@ set_fm iteration "$NEXT"
 PAYLOAD_BODY="$(awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$STATE_FILE")"
 
 # --- lessons catalog (metadata only; bodies are agent-retrieved on demand) -
-CATALOG_CAP="$(fm lesson_catalog_cap)"; [[ "$CATALOG_CAP" =~ ^[0-9]+$ ]] || CATALOG_CAP=8
-CATALOG="$(build_catalog "$CATALOG_CAP")"
+CATALOG=""
+if [[ "$LESSONS_ENABLED" == "true" ]]; then
+  CATALOG_CAP="$(fm lesson_catalog_cap)"; [[ "$CATALOG_CAP" =~ ^[0-9]+$ ]] || CATALOG_CAP=8
+  CATALOG="$(build_catalog "$CATALOG_CAP")"
+fi
 
 # --- user constitution (frozen, user-authored) ----------------------------
 # Inject verbatim ONLY if it has real content. An unfilled starter is all HTML
@@ -322,8 +328,7 @@ fi
 PROTO_FALLBACK='
 --- repete standing rules (phase ${PHASE} · iteration ${NEXT}) ---
 - Work from files and git, not from memory in this conversation.
-- When THIS loop'"'"'s exit goal is satisfied (and only then): output a <repete-checkpoint>...</repete-checkpoint> block with your proposed next-loop payload, then stop.
-- Only when the MISSION goal in .repete/MISSION.md is verifiably TRUE: output <repete-done> with that exact goal string </repete-done>. Never emit either sentinel just to escape the loop.'
+- Only when the MISSION goal in .repete/MISSION.md is verifiably TRUE: output <repete-done> with that exact goal string </repete-done>. Never emit it just to escape the loop.'
 # Only attempt the read when CLAUDE_PLUGIN_ROOT is set; otherwise the
 # expansion falls to a filesystem-root "/templates/protocol.md" that could
 # read an unrelated file and silently mask the fallback.
@@ -335,6 +340,23 @@ PROTO=""
 PROTO="${PROTO//'${PHASE}'/$PHASE}"
 # shellcheck disable=SC2016  # literal-token search pattern, see above.
 PROTO="${PROTO//'${NEXT}'/$NEXT}"
+
+# --- composed standing rules (gated by frontmatter flags) -----------------
+# The frozen protocol carries only re-read / constitution / done-sentinel. The
+# checkpoint sentinel and the lessons/todo journaling rules are OPT-IN: append
+# them only when their flag is on, so a default loop stays quiet.
+RULES_EXTRA=""
+if [[ "$AUTONOMOUS" != "true" ]]; then
+  RULES_EXTRA+=$'\n- When THIS loop'"'"'s exit goal is satisfied (and only then): output a <repete-checkpoint>...</repete-checkpoint> block with your proposed next-loop payload, then stop. The user approves it before the next loop starts. Never emit it just to escape the loop.'
+fi
+if [[ "$TODO_NEXT_ENABLED" == "true" ]]; then
+  RULES_EXTRA+=$'\n- Re-read .repete/todo-next.md before acting. The moment you notice work outside this loop'"'"'s exit goal, append it there (one line: what + why + where). Do not chase it now.'
+fi
+if [[ "$LESSONS_ENABLED" == "true" ]]; then
+  RULES_EXTRA+=$'\n- Consult the lessons catalog injected above. Read only the .repete/lessons/ cards whose tags match what you are about to do — do not bulk-read them all.'
+  RULES_EXTRA+=$'\n- When you hit a mistake, dead-end, or a fix that did not work, write a lesson card to .repete/lessons/ in the template format: what you tried, what happened, the rule for next time.'
+fi
+PROTO+="$RULES_EXTRA"
 
 # --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
 REINJECT="$PAYLOAD_BODY"
