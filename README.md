@@ -3,14 +3,17 @@
 Self-evolving autonomous loops for Claude Code.
 
 `repete` formalizes a Ralph-loop workflow into one plugin: an autonomous iteration loop
-that **evolves its own payload** at each human-gated checkpoint, **harvests out-of-scope
-discoveries** as the seed for the next loop, **learns from its mistakes** into a project
-lesson library, and **fights context rot** by turning a transcript-size budget into a
-`/clear` + rehydrate checkpoint. It reuses the [`remember`](https://github.com/anthropics/claude-code)
-plugin for tiered memory rather than reinventing it.
+that **evolves its own payload** at each human-gated checkpoint (or runs unattended in
+`autonomous` mode) and **fights context rot** by turning a transcript-size budget into a
+`/clear` + rehydrate checkpoint. Opt-in layers let it **harvest out-of-scope discoveries**
+as the seed for the next loop and **learn from its mistakes** into a project lesson library —
+both off by default so a bare loop stays quiet. It reuses the
+[`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
+reinventing it.
 
-This is **v0.1.1** — a single evolving loop with project-local lessons. Multi-phase mission
-chaining (v2) and cross-project global learning (v3) build on the same state model.
+This is **v0.1.3** — a single evolving loop with opt-in autonomous mode and opt-in project-local
+lessons. Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
+same state model.
 
 ## How it works
 
@@ -22,6 +25,11 @@ decision:
 | `<repete-done>GOAL</repete-done>` matching the mission goal | tears the loop down — **mission complete**                                                          |
 | `<repete-checkpoint>…payload…</repete-checkpoint>`          | writes the proposed payload to `.repete/transition.md` and **yields to you** for approval           |
 | neither                                                     | **blocks the stop and re-injects** the current loop payload + standing rules (autonomous iteration) |
+
+By default the loop is **gated**: it pauses at each per-loop exit goal for your approval. Set
+`autonomous: true` in `loop.local.md` to drop that gate — the loop then runs past sub-goals
+toward the mission and only stops on `<repete-done>` or `max_iterations` (a Stop hook still can't
+`/clear` itself, so the context-budget pause below still applies).
 
 Two safety yields also stop the autonomous run and hand control back:
 
@@ -67,10 +75,10 @@ operational and design judgment, so the commands stay terse:
 .repete/
 ├── MISSION.md        # north star + the verifiable mission goal (the <repete-done> string)
 ├── loop.local.md     # frontmatter (phase/iteration/status/budgets) + current loop payload
-├── todo-next.md      # out-of-scope discoveries — seeds the next loop
+├── todo-next.md      # out-of-scope discoveries — seeds the next loop (only if todo_next_enabled)
 ├── transition.md     # the agent's proposed next payload, awaiting your approval
 ├── handoff.md        # in-flight snapshot written at a context checkpoint, read on rehydrate
-└── lessons/          # one card per mistake/insight; retrieved into future loops
+└── lessons/          # one card per mistake/insight; retrieved into future loops (only if lessons_enabled)
 ```
 
 ## The two sentinels
@@ -87,11 +95,13 @@ the same honesty contract the Ralph loop relies on.
 
 ## Memory layers — what gets re-injected
 
-Each iteration's re-inject is assembled from four layers, in this order:
+Each iteration's re-inject is assembled from these layers, in this order. **Lessons are
+opt-in** (`lessons_enabled: false` by default) — a default loop re-injects only the brief, the
+constitution, and the frozen protocol, keeping each iteration quiet:
 
 1. **Evolving brief** — the body of `loop.local.md`: this loop's exit goal + working
    brief. Changes at every checkpoint.
-2. **Lessons catalog** — *metadata only*: one line per lesson card
+2. **Lessons catalog** *(only when `lessons_enabled: true`)* — *metadata only*: one line per lesson card
    (slug · tags · severity · hits), ranked by severity then hits, capped (default 8).
    The card **bodies** are never injected — the agent `Read`s only the relevant card
    on demand. This is deliberate: pasting card bodies every iteration is the exact
@@ -106,10 +116,11 @@ Each iteration's re-inject is assembled from four layers, in this order:
    binding rules aren't buried under the payload. Falls back to an inline core if the
    template is unreadable (fail-functional — never lose the two sentinels).
 
-When the agent hits a dead-end or a fix that didn't work, it writes a **lesson card** to
-`.repete/lessons/` (see `templates/lesson-card.md`): situation → tried → outcome → rule,
-tagged for retrieval. Cards are project-local in v1; recurrence-gated promotion to a
-global `~/.claude/repete/` store is the v3 design.
+When `lessons_enabled` is on and the agent hits a dead-end or a fix that didn't work, it writes a
+**lesson card** to `.repete/lessons/` (see `templates/lesson-card.md`): situation → tried →
+outcome → rule, tagged for retrieval. Cards are project-local in v1; recurrence-gated promotion to
+a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled` turns on the
+"log out-of-scope finds to `todo-next.md`" rule. Both are off by default.
 
 ## Requirements
 
@@ -120,7 +131,7 @@ global `~/.claude/repete/` store is the v3 design.
 ## Install (local testing)
 
 ```bash
-claude --plugin-dir /Volumes/Data/Workspace/dev/claude-plugins/cc-repete-plugin
+claude --plugin-dir .
 ```
 
 Then `/repete <your mission>` in a project. `/repete-cancel` (or delete `.repete/`) to stop.

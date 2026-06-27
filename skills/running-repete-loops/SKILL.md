@@ -79,6 +79,42 @@ protocol. Instruction adherence degrades with rule *count and mutual conflict*, 
 so a tight conflict-free constitution that re-injects every iteration helps the loop stay on
 the rails; a sprawling contradictory one quietly erodes adherence.
 
+## Optional features — off by default
+
+Three frontmatter flags in `loop.local.md` gate behavior that is **off by default**, because each
+adds re-injected text or removes a safety gate. Turn them on deliberately, not reflexively:
+
+- **`lessons_enabled: false`** — when on, the hook injects the lessons catalog each iteration and
+  the protocol gains a "write a lesson card on every dead-end / consult the catalog" rule. Worth it
+  for a long mission that should accrete a reusable lesson library; pure noise for a short loop.
+  Off → no catalog, no card-writing instruction, and `/repete` doesn't scaffold `.repete/lessons/`.
+- **`todo_next_enabled: false`** — when on, the protocol gains a "log out-of-scope finds to
+  `todo-next.md`" rule and `/repete` scaffolds the file. Off → the agent isn't told to journal
+  side-quests, so it stays focused on the exit goal. Turn it on when harvesting a backlog *is* the
+  point.
+- **`autonomous: false`** — see below.
+
+The default-off stance is the fix for the loop being too chatty: a bare loop re-injects only the
+brief + constitution + the frozen core protocol (re-read, constitution, the `<repete-done>`
+sentinel, and — in gated mode — the `<repete-checkpoint>` rule). Nothing instructs it to journal.
+
+### Autonomous mode
+
+`autonomous: true` removes the **checkpoint gate**: the loop no longer emits `<repete-checkpoint>`
+or pauses for `/repete-continue` at each per-loop exit goal — it keeps working toward the *mission*
+and only stops on `<repete-done>` (mission verifiably true) or `max_iterations`. Use it for an
+unsupervised run where you don't want to approve every sub-boundary.
+
+Two consequences to design for:
+
+1. **Use a coarse exit goal.** With no checkpoint gate, the per-loop exit goal stops being a
+   pause point, so in practice set it ≈ the mission goal (or just the next big slice). A narrow
+   exit goal in autonomous mode is harmless but pointless.
+2. **The context gate still fires.** A Stop hook cannot `/clear` itself (see
+   `designing-autonomous-loops` on the hook-spine constraint), so even an autonomous loop still
+   pauses at `context_budget_lines` for a human `/clear` + `/repete-continue`. Autonomy removes the
+   *checkpoint* gate, not the *context* gate — budget your run accordingly.
+
 ## Authoring lesson cards
 
 When the loop hits a mistake, dead-end, or a fix that didn't work, it writes a lesson card to
@@ -171,7 +207,10 @@ When the user starts a loop (`/repete`), establish, asking only for what's genui
    Usually "produce a plan + do the first slice", not the whole mission.
 3. **Constitution** — lay down `.repete/constitution.md` from the template; offer to seed it
    from any hard invariants the user states. Don't force a prompt — many loops have none.
-4. **Out of scope** — what gets logged to `.repete/todo-next.md` instead of chased now.
+4. **Optional features (default OFF)** — offer `lessons_enabled` / `todo_next_enabled` once,
+   briefly; enable only what the user wants (see *Optional features* above). Offer `autonomous`
+   only for an unsupervised run with a coarse exit goal. Leave all three off otherwise — a quiet
+   loop is the default for a reason.
 5. **Budgets** — suggest defaults; only confirm if the user cares.
 
 Then restate the mission goal, this loop's exit goal, the budgets, and the two exit signals in

@@ -16,14 +16,19 @@ Present a compact report:
 
 - **Mission goal** and whether it looks met (your read — do not auto-complete it).
 - **Phase / iteration**, `status`, `active`.
+- **Flags**: `lessons_enabled`, `todo_next_enabled`, `autonomous` (each on/off). In
+  autonomous mode, note the loop runs past checkpoints to the mission (no `<repete-checkpoint>`
+  pause).
 - **This loop's exit goal** (from the loop body).
 - **Budgets**: `max_iterations`, `context_budget_lines`.
-- **TODO_NEXT**: count + the top 3 lines.
-- **Lessons**: count + the highest-`severity` / highest-`hits` slugs.
-- **Lessons catalog (as the loop sees it)**: render the same ranked, capped catalog the
-  hook would inject — for each card (excluding `_TEMPLATE.md`) show `slug · [tags] ·
-  severity · hits`, ranked by severity then hits, capped at `lesson_catalog_cap` (default
-  8) with a `+N more` note if it overflows. This previews exactly what rides the re-inject.
+- **TODO_NEXT** (only if `todo_next_enabled`): count + the top 3 lines.
+- **Lessons** (only if `lessons_enabled`): count + the highest-`severity` / highest-`hits` slugs.
+- **Lessons catalog (as the loop sees it)**: only when `lessons_enabled: true` — render the
+  same ranked, capped catalog the hook would inject: for each card (excluding `_TEMPLATE.md`)
+  show `slug · [tags] · severity · hits`, ranked by severity then hits, capped at
+  `lesson_catalog_cap` (default 8) with a `+N more` note if it overflows. This previews exactly
+  what rides the re-inject. If `lessons_enabled: false`, print a one-line "lessons disabled — no
+  catalog is injected" note instead.
 - **Constitution**: report whether `.repete/constitution.md` exists and has real content
   (not just the commented starter); if it is large (well over ~40 lines combined with the
   protocol), warn that long frozen layers degrade adherence (rule count is the killer).
