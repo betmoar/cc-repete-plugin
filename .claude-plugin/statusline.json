@@ -1,5 +1,5 @@
 {
-  "name": "repete",
+  "name": "cc-repete",
   "render": "statusline/repete.sh",
   "order": 50
 }
