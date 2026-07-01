@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # cc-repete statusline segment tests. Run from anywhere: bash tests/test-statusline.sh
+# shellcheck disable=SC2016,SC2034  # ck() takes each assertion as a literal
+# string and evals it, so single quotes are deliberate and $OUT is used there.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SEG="$ROOT/statusline/repete.sh"
@@ -58,5 +60,20 @@ echo "== Missing state file: emits nothing =="
 rm -f "$TMP/.repete/loop.local.md"
 OUT="$(run)"
 ck "empty output when no state file" '[ -z "$OUT" ]'
+
+echo "== Body lines that look like frontmatter keys are ignored =="
+# Only the FIRST frontmatter block is state; prose in the body ("active: false",
+# "iteration: 99") must not be parsed. The pre-fix whole-file scan captured
+# multi-line garbage here and the segment went blank on an active loop.
+mkstate true 3 10
+printf 'note: when done set\nactive: false\niteration: 99\n' >> "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "shows rp[3/10] despite body decoys" '[ "$OUT" = "rp[3/10]" ]'
+
+echo "== CRLF-edited state file still renders =="
+mkstate true 4 8
+sed -i 's/$/\r/' "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "shows rp[4/8] with CRLF endings" '[ "$OUT" = "rp[4/8]" ]'
 
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

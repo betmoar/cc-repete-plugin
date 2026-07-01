@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # cc-repete hook smoke tests. Run from anywhere: bash tests/test-hooks.sh
+# shellcheck disable=SC2016,SC2034  # ck() takes each assertion as a literal
+# string and evals it, so single quotes are deliberate and $OUT is used there.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 H="$ROOT/hooks/stop-hook.sh"
@@ -195,5 +197,141 @@ mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "stranded: decision=block (loop re-injects)"     'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
 ck "stranded: iteration bumped (normal re-inject)"  'grep -qE "^iteration: 2$" "$TMP/.repete/loop.local.md"'
+
+# ---------------------------------------------------------------------------
+# Invariant locks: each block below pins a documented guarantee (the I*/C* tags
+# from comments in the hook) or a fixed regression. If one of these fails, a
+# guarantee the commands/README/skills promise has been broken — do not delete
+# the test to get green; fix the hook.
+# ---------------------------------------------------------------------------
+
+echo "== I2: checkpoint + done in the same message -> checkpoint wins (gated) =="
+scaffold ""
+mktx "<repete-checkpoint>next payload</repete-checkpoint> and <repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "I2: pauses at checkpoint, not done"  'grep -qE "^status: paused-checkpoint" "$TMP/.repete/loop.local.md"'
+ck "I2: loop NOT torn down"              'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+
+echo "== I1: a '---' horizontal rule inside the body survives into the re-inject =="
+scaffold ""
+printf -- 'part A\n\n---\n\npart B after the rule\n' >> "$TMP/.repete/loop.local.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "I1: text before the rule injected" 'printf "%s" "$OUT" | jq -r .reason | grep -q "part A"'
+ck "I1: text after the rule injected"  'printf "%s" "$OUT" | jq -r .reason | grep -q "part B after the rule"'
+
+echo "== C1: set_fm never touches body lines that look like frontmatter =="
+scaffold ""
+printf 'status: bogus-line-in-body\n' >> "$TMP/.repete/loop.local.md"
+mktx "done slice <repete-checkpoint>next</repete-checkpoint>"   # forces set_fm status
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "C1: frontmatter status updated"   'grep -qE "^status: paused-checkpoint" "$TMP/.repete/loop.local.md"'
+ck "C1: body decoy line untouched"    'grep -qE "^status: bogus-line-in-body" "$TMP/.repete/loop.local.md"'
+
+echo "== C2: session id with '&' '|' '/' is stamped verbatim on first sight =="
+scaffold ""   # session_id: ""
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"a&b|c/d\"}")"
+ck "C2: special chars persisted literally" 'grep -qF "session_id: \"a&b|c/d\"" "$TMP/.repete/loop.local.md"'
+
+echo "== C3: set_fm appends a key missing from the frontmatter =="
+scaffold 'autonomous: true'
+awk '!/^max_iterations:/' "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "C3: backstop cap persisted despite missing key" 'grep -qE "^max_iterations: 25" "$TMP/.repete/loop.local.md"'
+ck "C3: key landed in frontmatter, not body" 'awk "/^---/{f++} f==1 && /^max_iterations: 25/{found=1} END{exit !found}" "$TMP/.repete/loop.local.md"'
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "C3: no repeat backstop warning once persisted" '! printf "%s" "$OUT" | jq -r .systemMessage | grep -q "safety max_iterations"'
+
+echo "== Malformed transcript line: sentinels still detected (fail-open, never fail-closed) =="
+scaffold ""
+mktx "<repete-done>all tests pass</repete-done>"
+printf '%s\n' '{"truncated garbage no close' >> "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "bad line skipped: done still tears loop down" 'grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
+
+echo "== Sidechain (subagent) sentinel is ignored =="
+scaffold ""
+{
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"main thread work"}]}}'
+  printf '%s\n' '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"<repete-done>all tests pass</repete-done>"}]}}'
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "sidechain done does NOT end the loop" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "loop re-injects instead"              'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== Empty mission_goal: a done sentinel cannot tear the loop down =="
+scaffold ""
+setstate mission_goal '""'
+mktx "<repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "no goal -> done ignored, loop continues" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+
+echo "== Terminal statuses with a stale active:true never re-inject =="
+for tstate in 'done' 'cancelled'; do
+  scaffold ""
+  setstate status "$tstate"     # active stays true (failed teardown / hand edit)
+  mktx "did some work"
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "status ${tstate} + active true: exits silently" '[ -z "$OUT" ]'
+done
+
+echo "== CRLF-edited state file: loop still runs =="
+scaffold ""
+sed -i 's/$/\r/' "$TMP/.repete/loop.local.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "CRLF state: still re-injects (block)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== Protocol placeholders are substituted, not injected raw =="
+scaffold ""
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "phase/iteration substituted"  'printf "%s" "$OUT" | jq -r .reason | grep -q "iteration 2"'
+ck "no raw \${PHASE} token leaks" '! printf "%s" "$OUT" | jq -r .reason | grep -qF "\${PHASE}"'
+ck "no raw \${NEXT} token leaks"  '! printf "%s" "$OUT" | jq -r .reason | grep -qF "\${NEXT}"'
+
+echo "== Constitution: comments-only starter is skipped; filled rules injected =="
+scaffold ""
+cp "$ROOT/templates/constitution.md" "$TMP/.repete/constitution.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "unfilled starter NOT injected" '! printf "%s" "$OUT" | jq -r .reason | grep -q "project invariants"'
+printf '<!-- note -->\n- Never push to origin.\n\n- Run tests with make test.\n' > "$TMP/.repete/constitution.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "filled constitution injected"     'printf "%s" "$OUT" | jq -r .reason | grep -q "Never push to origin."'
+ck "constitution header present"      'printf "%s" "$OUT" | jq -r .reason | grep -q "project invariants"'
+ck "HTML comments stripped"           '! printf "%s" "$OUT" | jq -r .reason | grep -qF "<!-- note -->"'
+
+echo "== Lessons catalog: ranking, inline-comment severity, cap + overflow, robustness =="
+scaffold 'lessons_enabled: true'
+setstate lesson_catalog_cap 2
+rm -f "$TMP/.repete/lessons/001-foo-trap.md"   # scaffold's seed card would skew the ranking fixture
+printf -- '---\nslug: low-card\ntags: [a]\nseverity: low\nhits: 9\n---\nbody\n' > "$TMP/.repete/lessons/001-low.md"
+printf -- '---\nslug: high-card\ntags: [b]\nseverity: high   # bit hard\nhits: 08\n---\nbody\n' > "$TMP/.repete/lessons/002-high.md"
+printf -- '---\nslug: med-card\ntags: [c]\nseverity: medium\nhits: 2\n---\nbody\n' > "$TMP/.repete/lessons/003-med.md"
+printf -- '---\ntags: [d]\nseverity: high\n---\nno slug, must be skipped\n' > "$TMP/.repete/lessons/004-garbage.md"
+cp "$ROOT/templates/lesson-card.md" "$TMP/.repete/lessons/_TEMPLATE.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+CAT="$(printf '%s' "$OUT" | jq -r .reason | sed -n '/Known lessons/,/more — grep/p')"
+ck "high severity ranks first (inline comment stripped)" 'printf "%s\n" "$CAT" | sed -n 2p | grep -q "high-card"'
+ck "leading-zero hits parsed as decimal 8"               'printf "%s\n" "$CAT" | sed -n 2p | grep -q "hits:8"'
+ck "medium ranks second"                                 'printf "%s\n" "$CAT" | sed -n 3p | grep -q "med-card"'
+ck "cap=2: low card not shown"                           '! printf "%s\n" "$CAT" | grep -q "low-card"'
+ck "overflow note counts the hidden card"                'printf "%s\n" "$CAT" | grep -q "+1 more"'
+ck "slugless card skipped silently"                      '! printf "%s\n" "$CAT" | grep -q "no slug"'
+ck "_TEMPLATE.md never listed"                           '! printf "%s\n" "$CAT" | grep -q "short-kebab-slug"'
+
+echo "== Coupling lock: templates/handoff.md headings match the hook's scaffolding-strip list =="
+# The pass-2 "was the handoff actually filled?" test strips the template's own
+# section headings. If someone renames a heading in templates/handoff.md without
+# updating the strip pattern (and the pass-1 re-inject brief) in the hook, an
+# unfilled template would count as "filled" — a false 'snapshot saved'.
+while IFS= read -r heading; do
+  ck "hook knows heading: $heading" "grep -qF \"$heading\" \"$H\""
+done < <(grep -E '^## ' "$ROOT/templates/handoff.md" | sed 's/^## //')
 
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]
