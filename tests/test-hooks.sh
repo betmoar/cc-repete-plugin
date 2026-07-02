@@ -279,7 +279,7 @@ done
 
 echo "== CRLF-edited state file: loop still runs =="
 scaffold ""
-sed -i 's/$/\r/' "$TMP/.repete/loop.local.md"
+perl -i -pe 's/\n/\r\n/' "$TMP/.repete/loop.local.md"   # BSD sed -i can't add CR; perl is portable (already a dep)
 mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "CRLF state: still re-injects (block)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'

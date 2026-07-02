@@ -72,7 +72,7 @@ ck "shows rp[3/10] despite body decoys" '[ "$OUT" = "rp[3/10]" ]'
 
 echo "== CRLF-edited state file still renders =="
 mkstate true 4 8
-sed -i 's/$/\r/' "$TMP/.repete/loop.local.md"
+perl -i -pe 's/\n/\r\n/' "$TMP/.repete/loop.local.md"   # BSD sed -i can't add CR; perl is portable (already a dep)
 OUT="$(run)"
 ck "shows rp[4/8] with CRLF endings" '[ "$OUT" = "rp[4/8]" ]'
 
