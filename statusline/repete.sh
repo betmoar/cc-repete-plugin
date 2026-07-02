@@ -24,11 +24,25 @@ fi
 LOOP="$PROJ/.repete/loop.local.md"
 [[ -f "$LOOP" ]] || exit 0
 
-active=$(awk '/^active:/{print $2}' "$LOOP")
+# Read a key from the FIRST frontmatter block only, exactly like the hook's
+# fm() — a whole-file scan also matched body prose that happens to start with
+# "active:"/"iteration:", capturing multi-line garbage and blanking the segment.
+# \r is stripped so a CRLF-edited state file still renders.
+fmv() { # key
+  awk -v k="$1" '
+    /^---[[:space:]]*$/ { f++; next }
+    f==1 && index($0, k":")==1 {
+      sub("^" k ":[[:space:]]*", ""); gsub(/\r/, ""); print; exit
+    }
+    f>=2 { exit }
+  ' "$LOOP"
+}
+
+active=$(fmv active)
 [[ "$active" == "true" ]] || exit 0
 
-iter=$(awk '/^iteration:/{print $2}' "$LOOP")
-max=$(awk '/^max_iterations:/{print $2}' "$LOOP")
+iter=$(fmv iteration)
+max=$(fmv max_iterations)
 [[ "$iter" =~ ^[0-9]+$ ]] || iter=0
 
 if [[ "$max" =~ ^[0-9]+$ ]] && [[ "$max" -gt 0 ]]; then

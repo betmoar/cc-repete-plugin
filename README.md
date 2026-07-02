@@ -11,7 +11,7 @@ both off by default so a bare loop stays quiet. It reuses the
 [`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.1.3** — a single evolving loop with opt-in autonomous mode and opt-in project-local
+This is **v0.1.4** — a single evolving loop with opt-in autonomous mode and opt-in project-local
 lessons. Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
 same state model.
 
@@ -69,7 +69,7 @@ operational and design judgment, so the commands stay terse:
   context rot with memory layering. Grounded in measured rot findings. Reach for
   it when weighing "should I loop this" or architecting a long run.
 
-## State layout (`.repete/`, per project, git-ignored)
+## State layout (`.repete/`, per project — `/repete` adds it to your `.gitignore`)
 
 ```
 .repete/
@@ -124,7 +124,8 @@ a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled
 
 ## Requirements
 
-- `jq` and `perl` on `PATH` (both ship with macOS). Without `jq` the hook fails open — it
+- `jq` and `perl` on `PATH` (`perl` ships with macOS; `jq` ships with recent macOS and
+  most Linux distros — install it if missing). Without `jq` the hook fails open — it
   will not trap you in a loop it can't steer.
 - The `remember` plugin is recommended (memory + `SessionStart` rehydrate) but not required.
 

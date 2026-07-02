@@ -67,6 +67,12 @@ Create, in the project root:
   they have none, leave the starter as-is (it stays inert until filled). Do NOT force this as
   a blocking prompt — offer it and move on.
 
+Finally, make sure `.repete/` is git-ignored in the project: if the project has a
+`.gitignore` without a `.repete/` line, append one (create `.gitignore` with that line if
+the project is a git repo and has none). Loop state is session-scratch and must not land
+in commits. Exception: only if the user explicitly says they want to version the lesson
+library, add a `!.repete/lessons/` negation below it — never do that unprompted.
+
 If `.repete/loop.local.md` already exists and is `active: true`, STOP and tell the user a
 loop is already running (offer `/repete-status` or `/repete-cancel`).
 

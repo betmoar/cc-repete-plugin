@@ -32,16 +32,25 @@ command -v jq >/dev/null 2>&1 || exit 0
 HOOK_INPUT="$(cat)"
 
 # ---- frontmatter helpers -------------------------------------------------
-FM="$(awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' "$STATE_FILE")"
+# tr -d '\r': a CRLF-edited state file (Windows editor) otherwise yields values
+# like "true<CR>" that fail every == test, silently deactivating the loop.
+FM="$(awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' "$STATE_FILE" | tr -d '\r')"
 fm() { printf '%s\n' "$FM" | grep "^$1:" | head -1 | sed "s/^$1:[[:space:]]*//" | sed 's/^"\(.*\)"$/\1/'; }
 
 set_fm() { # key value  (atomic update of a key ONLY within the first frontmatter block)
   # awk -v makes the value literal, so '&', '|', '/' in a value are safe (C2),
   # and the f==1 guard means body lines matching "^key:" are never touched (C1).
+  # If the key is absent (hand-authored or older state file), it is APPENDED
+  # just before the closing '---' (C3) — a silent no-op here meant writes like
+  # the autonomous safety cap never persisted and the hook re-warned forever.
   local key="$1" val="$2" tmp="$STATE_FILE.tmp.$$"
   awk -v k="$key" -v v="$val" '
-    /^---[[:space:]]*$/ { f++; print; next }
-    f==1 && index($0, k":")==1 { print k": " v; next }
+    /^---[[:space:]]*$/ {
+      f++
+      if (f==2 && !written) { print k": " v; written=1 }
+      print; next
+    }
+    f==1 && index($0, k":")==1 { print k": " v; written=1; next }
     { print }
   ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 }
@@ -110,8 +119,11 @@ ACTIVE="$(fm active)"
 [[ "$ACTIVE" == "true" ]] || exit 0
 
 # Already paused awaiting the user -> let the stop go through untouched.
+# done/cancelled are terminal: they normally arrive with active:false, but a
+# hand edit or a failed teardown write can leave active:true — never re-inject
+# a finished loop on that account.
 case "$(fm status)" in
-  paused-checkpoint|paused-context|paused-max|paused) exit 0 ;;
+  paused-checkpoint|paused-context|paused-max|paused|done|cancelled) exit 0 ;;
 esac
 
 # ---- session isolation ---------------------------------------------------
@@ -154,10 +166,21 @@ fi
 TRANSCRIPT="$(printf '%s' "$HOOK_INPUT" | jq -r '.transcript_path // ""')"
 LAST_OUTPUT=""
 if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
-  LAST_OUTPUT="$(jq -rs '
-      [ .[] | select(.message.role=="assistant") ] | last
+  # Parse line-by-line with fromjson? so ONE malformed line (a partial write,
+  # a crash mid-append) skips that line instead of aborting the whole parse.
+  # jq -s aborts on any bad line, which blanked LAST_OUTPUT and blinded the
+  # hook to <repete-done>/<repete-checkpoint> — blocking every Stop with no
+  # sentinel escape (fail-CLOSED, the one direction this engine must never
+  # fail). Sidechain (subagent) entries are excluded: a sentinel is honored
+  # only from the main thread.
+  LAST_OUTPUT="$(jq -rRs '
+      [ split("\n")[] | fromjson? | objects
+        | select(.isSidechain != true)
+        | select(.message.role? == "assistant") ] | last
       | (.message.content // [])
-      | if type=="array" then (map(select(.type=="text").text) | join("\n")) else tostring end
+      | if type=="array"
+        then ([ .[] | objects | select(.type=="text") | .text ] | join("\n"))
+        else tostring end
     ' "$TRANSCRIPT" 2>/dev/null || echo "")"
 fi
 
