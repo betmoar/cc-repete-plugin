@@ -80,8 +80,12 @@ the project is a git repo and has none). Loop state is session-scratch and must 
 in commits. Exception: only if the user explicitly says they want to version the lesson
 library, add a `!.repete/lessons/` negation below it — never do that unprompted.
 
-If `.repete/loop.local.md` already exists and is `active: true`, STOP and tell the user a
-loop is already running (offer `/repete-status` or `/repete-cancel`).
+If `.repete/` already exists (a `loop.local.md` in ANY state — running, paused, `done`, or
+`cancelled`), STOP before scaffolding anything and tell the user: an active loop is running
+(offer `/repete-status` or `/repete-cancel`); a done/cancelled one holds the previous
+mission's state, phase/iteration history, and the user-authored `constitution.md` — ask
+whether to archive it (e.g. move `.repete/` aside) before overwriting. Never silently
+replace prior loop state; `/repete-cancel` promises state is preserved for review.
 
 ### Optional features (default OFF — keep the loop quiet)
 
@@ -100,13 +104,17 @@ the user wants what they add:
   **Pair it with a non-zero `max_iterations`** — `autonomous` + `max_iterations: 0` (the
   template default) has no checkpoint backstop, so the only stops are `<repete-done>` and the
   context-budget pause; set a cap so a stuck loop can't grind indefinitely. As a last resort
-  the Stop hook self-heals this trap: if `autonomous: true` runs with **both** `max_iterations`
-  and `context_budget_lines` at 0, it stamps a safety `max_iterations: 25` into state and warns
-  once — so a stuck mission can never block Stop forever. Set your own cap to override it.
+  the Stop hook self-heals this trap: ANY active loop (autonomous or gated) running with
+  **both** `max_iterations` and `context_budget_lines` at 0 gets a safety `max_iterations: 25`
+  stamped into state with a one-time warning — so a stuck loop (even a gated one whose agent
+  never checkpoints) can never block Stop forever. Set your own cap to override it.
   Note the other limit: a Stop hook cannot `/clear` itself, so an autonomous loop still pauses
   at the `context_budget_lines` boundary for a human `/clear` — autonomy removes the
   *checkpoint* gate, not the *context* gate.
-- **`gauntlet`** — builder/critic rounds against a reference. When `true`, the hook injects
+- **`gauntlet`** — builder/critic rounds against a reference. When `true` AND both
+  `reference:` and `bar:` are filled (the hook enforces this: with either empty the rules
+  are withheld — a gauntlet with nothing to reference is iteration-burning theater), the
+  hook injects
   gauntlet working rules each iteration (from `templates/gauntlet.md`): the agent maintains
   `.repete/parts.md` (part · judgeable criterion · status), dispatches one builder subagent
   per part, and every round dispatches ONE fresh-context critic that blind-compares this

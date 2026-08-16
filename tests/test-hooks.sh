@@ -396,6 +396,17 @@ ck "overflow note counts the hidden card"                'printf "%s\n" "$CAT" |
 ck "slugless card skipped silently"                      '! printf "%s\n" "$CAT" | grep -q "no slug"'
 ck "_TEMPLATE.md never listed"                           '! printf "%s\n" "$CAT" | grep -q "short-kebab-slug"'
 
+echo "== F11/F12: catalog hardening — tabs and # in card fields =="
+scaffold 'lessons_enabled: true'
+rm -f "$TMP/.repete/lessons/001-foo-trap.md"
+printf -- '---\nslug: tab-card\ntags: [a\tb]\nseverity: high\nhits: 3\n---\nbody\n' > "$TMP/.repete/lessons/010-tab.md"
+printf -- '---\nslug: hash-card\ntags: [parser, #123]\nseverity: medium\nhits: 2\n---\nbody\n' > "$TMP/.repete/lessons/011-hash.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+CAT="$(printf '%s' "$OUT" | jq -r .reason | sed -n '/Known lessons/,/more — grep/p')"
+ck "F11: tab in tags sanitized, columns intact" 'printf "%s\n" "$CAT" | grep -qE "tab-card +\[a-b\] high +hits:3"'
+ck "F12: # in tags preserved (issue refs)"      'printf "%s\n" "$CAT" | grep -qE "hash-card +\[parser,#123\] medium +hits:2"'
+
 echo "== I2-stale: checkpoint + mismatched done in one message -> checkpoint wins, no count =="
 scaffold ""
 mktx "<repete-checkpoint>next payload</repete-checkpoint> and <repete-done>nope</repete-done>"
@@ -424,6 +435,108 @@ mktx "<repete-done>nope</repete-done>"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "autonomous mismatch counted" 'grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
 
+echo "== Octal numerics: leading-zero values are DECIMAL, never crash (audit F1) =="
+scaffold ""
+setstate iteration 08
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "iteration 08 bumps to 9 (no octal crash)" 'grep -qE "^iteration: 9" "$TMP/.repete/loop.local.md"'
+ck "decision JSON still emitted (no exit-1 death)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== Octal max_iterations: cap enforced as decimal =="
+scaffold ""
+setstate max_iterations 09
+setstate iteration 9
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "max 09 caps at 9 -> paused-max" 'grep -qE "^status: paused-max" "$TMP/.repete/loop.local.md"'
+
+echo "== Octal budgets + stale_limit: silent-disable fixed =="
+scaffold 'autonomous: true'
+setstate max_iterations 00
+setstate context_budget_lines 00
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "octal 00 budgets -> backstop stamps 25" 'grep -qE "^max_iterations: 25" "$TMP/.repete/loop.local.md"'
+scaffold ""
+setstate stale_limit 08
+setstate max_iterations 50   # room for 8 mismatch turns (F5 backstop otherwise caps at 25 — fine but noisy)
+mktx "<repete-done>nope</repete-done>"
+for i in 1 2 3 4 5 6 7 8; do
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+  grep -qE "^status: paused-stale" "$TMP/.repete/loop.local.md" && break
+done
+ck "stale_limit 08 counts to 8 decimal -> paused-stale" 'grep -qE "^status: paused-stale" "$TMP/.repete/loop.local.md"'
+
+echo "== UTF-8 BOM state file: loop stays alive (audit F7) =="
+scaffold ""
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "BOM loop still blocks + re-injects" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== F2: mismatched done-claim + budget-cross in one Stop -> feedback survives =="
+scaffold ""
+setstate context_budget_lines 3
+{
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"a"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"b"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"c"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"<repete-done>nope</repete-done>"}]}}'
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "F2: stale_count bumped despite budget path" 'grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
+ck "F2: budget pass-1 fires (summarizing)" 'grep -qE "^status: summarizing" "$TMP/.repete/loop.local.md"'
+ck "F2: handoff re-inject CARRIES the stale note" 'printf "%s" "$OUT" | jq -r .reason | grep -q "does NOT match"'
+
+# F8 grep-lock: the checkpoint-promote step MUST instruct stale_count reset (prompt-code,
+# so the test locks the instruction's presence, not the behavior).
+ck "F8: /repete-continue promote resets stale_count (grep-lock)" \
+   'grep -q "stale_count.*→.*0" "$ROOT/commands/repete-continue.md"'
+
+echo "== F3: quoted-example sentinel earlier in text must NOT beat the real one =="
+scaffold ""
+mktx "syntax note: <repete-done>example text</repete-done> — but for real: <repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "F3: last done capture wins -> mission tears down" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "F3: no stale bump for the quoted example" '! grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
+
+echo "== F3: two checkpoint blocks -> the LAST payload goes to transition.md =="
+scaffold ""
+mktx "scratch: <repete-checkpoint>draft payload</repete-checkpoint> ... final: <repete-checkpoint>the real next payload</repete-checkpoint>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "F3: transition.md carries the LAST payload" 'grep -q "the real next payload" "$TMP/.repete/transition.md"'
+ck "F3: draft payload not promoted" '! grep -q "^draft payload$" "$TMP/.repete/transition.md"'
+
+echo "== F5: GATED loop with both budgets 0 gets the no-escape backstop too =="
+scaffold ""    # gated (no autonomous), both budgets 0 from scaffold defaults
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "F5: gated both-0 -> backstop stamps 25" 'grep -qE "^max_iterations: 25" "$TMP/.repete/loop.local.md"'
+ck "F5: backstop warning surfaces once" 'printf "%s" "$OUT" | jq -r .systemMessage | grep -q "safety max_iterations"'
+
+echo "== F10: gauntlet on but reference/bar empty -> no gauntlet rules =="
+scaffold 'gauntlet: true'
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "F10: no reference -> rules withheld" '! printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
+ck "F10: loop still re-injects normally" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== F10: gauntlet with reference+bar filled -> rules injected =="
+scaffold $'gauntlet: true\nreference: "examples/great.md"\nbar: "all parts judged at bar"'
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "F10: reference+bar present -> rules injected" 'printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
+
+# F4 grep-lock: the paused-context resume branch must address a deferred iteration cap
+# (otherwise resume is dead: next Stop fires paused-max with zero work turns).
+ck "F4: /repete-continue paused-context handles cap" \
+   'grep -q "max_iterations" "$ROOT/commands/repete-continue.md" && awk "/## status: paused-context/,/## status: paused-stale/" "$ROOT/commands/repete-continue.md" | grep -q "iteration.*cap\|cap.*iteration\|max_iterations"'
+
+# F6 grep-lock: /repete must refuse to scaffold over ANY existing .repete/, not just active:true.
+ck "F6: /repete guards on existing .repete (any state)" \
+   'awk "/already exists/,/repete-status/" "$ROOT/commands/repete.md" | grep -q "done\|cancelled\|terminal\|any"'
+
 # --- invariant lock ---------------------------------------------------------
 echo "== INVARIANT: a mismatched done-claim NEVER tears the loop down =="
 scaffold ""
@@ -446,7 +559,7 @@ ck "default off: no parts.md rule" '! printf "%s" "$OUT" | jq -r .reason | grep 
 ck "default off: still blocks + re-injects" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
 
 echo "== Gauntlet: on -> working rules injected =="
-scaffold 'gauntlet: true'
+scaffold $'gauntlet: true\nreference: "examples/great.md"\nbar: "all parts judged"'
 mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "on: parts.md rule injected"        'printf "%s" "$OUT" | jq -r .reason | grep -q "parts.md"'
@@ -462,7 +575,7 @@ OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "garbage flag: no gauntlet rules" '! printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
 
 echo "== Gauntlet: unreadable template -> GAUNTLET_FALLBACK carries the rules =="
-scaffold 'gauntlet: true'
+scaffold $'gauntlet: true\nreference: "examples/great.md"\nbar: "all parts judged"'
 mktx "did some work"
 OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
   | CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$TMP/noplugin" bash "$H")"
@@ -470,14 +583,14 @@ ck "fallback: parts.md rule present"   'printf "%s" "$OUT" | jq -r .reason | gre
 ck "fallback: final-pass rule present" 'printf "%s" "$OUT" | jq -r .reason | grep -q "final integration"'
 
 echo "== Gauntlet: critique.md pointer rides the re-inject =="
-scaffold 'gauntlet: true'
+scaffold $'gauntlet: true\nreference: "examples/great.md"\nbar: "all parts judged"'
 printf 'WINNER: round N-1\nLargest gap: pagination a11y vs reference.\n' > "$TMP/.repete/critique.md"
 mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "critique first line injected"      'printf "%s" "$OUT" | jq -r .reason | grep -q "WINNER: round N-1"'
 
 echo "== Gauntlet: no critique.md -> no pointer, rest normal =="
-scaffold 'gauntlet: true'
+scaffold $'gauntlet: true\nreference: "examples/great.md"\nbar: "all parts judged"'
 rm -f "$TMP/.repete/critique.md"
 mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
@@ -485,7 +598,7 @@ ck "no critique: no WINNER pointer"  '! printf "%s" "$OUT" | jq -r .reason | gre
 ck "no critique: rules still present"  'printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
 
 echo "== Gauntlet + lessons + constitution compose without clobbering =="
-scaffold $'gauntlet: true\nlessons_enabled: true'
+scaffold $'gauntlet: true\nreference: "examples/great.md"\nbar: "all parts judged"\nlessons_enabled: true'
 printf '<!-- note -->\n- Never push to origin.\n' > "$TMP/.repete/constitution.md"
 mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"

@@ -132,7 +132,12 @@ If you add a check, decide its failure direction first and write it in a comment
   safe one. Autonomous mode instead forces `HAS_CHECKPOINT=0` so only done/budgets stop it.
 - **The autonomous backstop** (both budgets 0 → stamp `max_iterations: 25`) exists so a
   buggy mission goal can never block Stop forever. It must persist to state (C3) or it
-  warns every iteration.
+  warns every iteration. Since the 2026-08 audit it applies to GATED loops too — a gated
+  loop whose agent never checkpoints has no other mechanical stop (51 consecutive
+  iterations reproduced). Any active loop with both budgets 0 gets the cap.
+- **Gauntlet rules require `reference:` AND `bar:` non-empty** (audit F10): injecting
+  builder/critic rules with nothing to reference is iteration-burning theater. The hook
+  gates on both keys; the flag alone is not enough.
 - **Constitution/handoff "emptiness" tests strip scaffolding literally** — HTML
   comments, the template's exact headings, whole-line `<placeholders>`. Stripping any
   `#`-leading line instead would misclassify real content like "# TODO finish parser".
@@ -170,6 +175,23 @@ If you add a check, decide its failure direction first and write it in a comment
    loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
 5. **v2/v3 roadmap** (README): phased missions; global lesson store with
    recurrence-gated promotion. The state model was designed to extend to both.
+6. **Per-Stop transcript cost is O(whole transcript)** (audit F13, measured 342MB RSS /
+   ~2.8s per Stop on a 32MB transcript, re-paid every iteration). A naive tail-bound is
+   UNSAFE (500 trailing sidechain lines can hide the last main-thread sentinel —
+   fail-closed); the fix needs a grow-the-window scan that falls back to a full read
+   when the window comes up sentinel-blind. Own engagement; don't bolt onto another fix.
+   The fm() fork count (~60/Stop) is real but millisecond-scale — batch opportunistically,
+   never urgently.
+7. **Audit cuts still open** (from the 2026-08-16 max audit, verified but unfixed):
+   `set_fm`'s awk -v backslash mangling (UUID-safe today — switch to ENVIRON if free-text
+   values ever land in frontmatter); set_fm C3 append no-ops on a state file missing its
+   closing `---` (backstop re-warns every Stop); bare `paused` status vestige (no writer,
+   no resume branch — remove or wire); gauntlet `[[ -s critique.md ]]` true for a
+   directory (empty-verdict pointer — guard with `-f` if it ever bites); the
+   "keep/!update" garble lineage in repete-continue step 4 (fixed wording, watch
+   regressions); missing tests for no-jq exit-0, stranded-summarizing cap re-application,
+   transition.md content; ck `jq | grep -q` SIGPIPE false-FAIL on >64KB payloads
+   (dormant under current fixtures — switch to `jq -e` predicates when touched).
 
 ## Operator
 

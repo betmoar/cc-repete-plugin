@@ -31,7 +31,9 @@ decision:
 By default the loop is **gated**: it pauses at each per-loop exit goal for your approval. Set
 `autonomous: true` in `loop.local.md` to drop that gate — the loop then runs past sub-goals
 toward the mission and only stops on `<repete-done>` or `max_iterations` (a Stop hook still can't
-`/clear` itself, so the context-budget pause below still applies).
+`/clear` itself, so the context-budget pause below still applies). Either way, a loop with
+**both** budgets at 0 gets a safety `max_iterations: 25` stamped with a one-time warning — no
+configuration can trap Stop forever.
 
 Three safety yields also stop the autonomous run and hand control back:
 
@@ -56,7 +58,8 @@ drift and bad decisions compound.
 ## Gauntlet mode (opt-in): builder/critic rounds against a reference
 
 `gauntlet: true` (with `reference:` — a concrete example of "great" — and `bar:` — one line
-naming what "reached the bar" means) turns iterations into reference-driven improvement
+naming what "reached the bar" means; the hook withholds the rules if either is empty) turns
+iterations into reference-driven improvement
 rounds. The hook injects the working rules; the **agent** runs the pattern with subagents:
 
 1. Split the artifact into the smallest independently judgeable parts (`.repete/parts.md`).

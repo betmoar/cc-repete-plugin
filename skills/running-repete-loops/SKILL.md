@@ -128,7 +128,8 @@ runs the pattern with its own subagents. The loop engine (budgets, sentinels, do
 is untouched: a critic never gates the done sentinel, and stray sentinels from builder/critic
 subagents are already ignored by the sidechain guard.
 
-Prerequisites, both required or keep it off:
+Prerequisites, both required or keep it off (the hook enforces this — with either key empty
+the working rules are withheld and the loop runs plain):
 
 - **`reference:`** — a concrete example of "great" the agent can actually read (path, repo, URL).
   No reference → nothing to A/B against → the rounds are theater.
