@@ -650,6 +650,15 @@ OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}
   | env PATH="$MINBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
 ck "no-perl: normal state file still loops (block)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
 
+# Combined worst case (verify-round): BOM'd file AND no perl. Documented direction:
+# pre-F7 behavior — the loop reads inactive and the hook exits silently. Locking it
+# prevents a future "fix" from turning this into a crash or a different failure class.
+scaffold ""
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$MINBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
+ck "no-perl + BOM: silent exit (pre-F7 inactive), no crash output" '[ -z "$OUT" ]'
+
 echo "== num10 overflow: huge digit-string defaults, never negative =="
 scaffold ""
 setstate max_iterations 99999999999999999999999999
@@ -661,7 +670,8 @@ scaffold ""
 setstate iteration 99999999999999999999999999
 mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
-ck "overflow iteration -> sane behavior, decision JSON emitted" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+ck "overflow iteration -> written back as sane small positive int" \
+   'awk "/^---/{f++} f==1 && /^iteration:/{print \$2; exit}" "$TMP/.repete/loop.local.md" | grep -qE "^[0-9]+$" && ! grep -qE "^iteration: -" "$TMP/.repete/loop.local.md"'
 
 echo "== INVARIANT: a mismatched done-claim NEVER tears the loop down =="
 scaffold ""

@@ -43,7 +43,9 @@ HOOK_INPUT="$(cat)"
 # line only. Failure direction: NO perl on PATH -> read the file RAW (pre-F7
 # behavior: a BOM'd file degrades to inactive, same as before the fix) — never
 # an empty read that would deactivate every loop (toolkit review critical).
-# shellcheck disable=SC2012
+# NOTE: the $(cat) roundtrip strips embedded NUL bytes (command substitution
+# limitation) — a NUL-corrupted state file reads as inactive, the same
+# fail-open direction as the BOM/CRLF cases; pathological, accepted.
 FM_RAW="$(cat "$STATE_FILE" 2>/dev/null)"
 FM=""
 if command -v perl >/dev/null 2>&1; then

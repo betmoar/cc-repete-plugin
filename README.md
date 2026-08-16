@@ -159,9 +159,11 @@ a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled
 
 ## Requirements
 
-- `jq` and `perl` on `PATH` (`perl` ships with macOS; `jq` ships with recent macOS and
-  most Linux distros — install it if missing). Without `jq` the hook fails open — it
-  will not trap you in a loop it can't steer.
+- `jq` and `perl` on `PATH` are recommended but **fail-open optional** (`perl` ships with
+  macOS; `jq` ships with recent macOS and most Linux distros). Without `jq` the hook
+  fails open — it will not trap you in a loop it can't steer. Without `perl` the loop
+  still runs; only the UTF-8-BOM strip degrades (a BOM'd state file reads as inactive,
+  same as before that hardening) and sentinel probes fall back to permissive reads.
 - The `remember` plugin is recommended (memory + `SessionStart` rehydrate) but not required.
 
 ## Install (local testing)
