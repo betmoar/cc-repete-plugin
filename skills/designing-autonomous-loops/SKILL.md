@@ -137,6 +137,14 @@ keeps the binding rules out from under the volatile payload. (Don't justify this
 200K-window "lost in the middle" curve — that doesn't transfer to a 40-line block; the reason is
 simply "don't bury the must-follow rules.")
 
+**Builder/critic decomposition** (repete's `gauntlet` mode): when the loop's job is raising an
+artifact to an ambitious quality bar and a concrete reference exists, split the artifact into
+independently judgeable parts, build each in a subagent, and judge each round with a
+*fresh-context* critic that blind-compares against the reference — the builder must not grade
+its own homework. This is an orthogonal axis to memory layering: layering fights context rot,
+the critic fights builder bias. See the running skill's *Gauntlet runs* section for the round
+discipline; the budget boundaries (iterations/context/stale) supply the stop conditions.
+
 ## Putting it together — a design checklist
 
 1. **Is it a loop?** Iterative + long + checkable end state. If not, plan or one-shot instead.

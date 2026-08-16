@@ -19,6 +19,9 @@ scaffold(){
     printf -- '---\nactive: true\nphase: 1\niteration: 1\nsession_id: ""\n'
     printf 'max_iterations: 0\ncontext_budget_lines: 0\nlesson_catalog_cap: 8\n'
     printf 'stale_count: 0\nstale_limit: 3\n'
+    # gauntlet/reference/bar: NOT seeded — absent must default to off/""/"" (the
+    # "missing field" behavior is itself under test). Use scaffold 'gauntlet: true'
+    # or setstate to turn it on; never append a second key (fm reads the first).
     printf 'mission_goal: "all tests pass"\nstatus: running\nstarted_at: ""\n'
     [ -n "$1" ] && printf '%s\n' "$1"
     printf -- '---\n## This loop'"'"'s exit goal\ndo the slice\n'
@@ -434,6 +437,67 @@ mktx "<repete-done>ALL TESTS PASS</repete-done>"   # case-mismatched: must NEVER
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "case-mismatched claim: still active" '! grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
 ck "case-mismatched claim: not done"     '! grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== Gauntlet: default off -> no gauntlet rules in re-inject =="
+scaffold ""
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "default off: no parts.md rule" '! printf "%s" "$OUT" | jq -r .reason | grep -q "parts.md"'
+ck "default off: still blocks + re-injects" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== Gauntlet: on -> working rules injected =="
+scaffold 'gauntlet: true'
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "on: parts.md rule injected"        'printf "%s" "$OUT" | jq -r .reason | grep -q "parts.md"'
+ck "on: critic rule injected"          'printf "%s" "$OUT" | jq -r .reason | grep -q "critic"'
+ck "on: final-pass rule injected"      'printf "%s" "$OUT" | jq -r .reason | grep -q "final integration"'
+ck "on: rules come after constitution, before protocol" 'printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
+ck "on: still blocks + re-injects (no new exit path)"   'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== Gauntlet: garbage flag -> off (fail toward default behavior) =="
+scaffold 'gauntlet: yes'
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "garbage flag: no gauntlet rules" '! printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
+
+echo "== Gauntlet: unreadable template -> GAUNTLET_FALLBACK carries the rules =="
+scaffold 'gauntlet: true'
+mktx "did some work"
+OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$TMP/noplugin" bash "$H")"
+ck "fallback: parts.md rule present"   'printf "%s" "$OUT" | jq -r .reason | grep -q "parts.md"'
+ck "fallback: final-pass rule present" 'printf "%s" "$OUT" | jq -r .reason | grep -q "final integration"'
+
+echo "== Gauntlet: critique.md pointer rides the re-inject =="
+scaffold 'gauntlet: true'
+printf 'WINNER: round N-1\nLargest gap: pagination a11y vs reference.\n' > "$TMP/.repete/critique.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "critique first line injected"      'printf "%s" "$OUT" | jq -r .reason | grep -q "WINNER: round N-1"'
+
+echo "== Gauntlet: no critique.md -> no pointer, rest normal =="
+scaffold 'gauntlet: true'
+rm -f "$TMP/.repete/critique.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "no critique: no WINNER pointer"  '! printf "%s" "$OUT" | jq -r .reason | grep -q "Last critic verdict"'
+ck "no critique: rules still present"  'printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
+
+echo "== Gauntlet + lessons + constitution compose without clobbering =="
+scaffold $'gauntlet: true\nlessons_enabled: true'
+printf '<!-- note -->\n- Never push to origin.\n' > "$TMP/.repete/constitution.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "compose: constitution present" 'printf "%s" "$OUT" | jq -r .reason | grep -q "Never push to origin."'
+ck "compose: catalog present"      'printf "%s" "$OUT" | jq -r .reason | grep -q "Known lessons"'
+ck "compose: gauntlet present"     'printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
+ck "compose: protocol still LAST"  'printf "%s" "$OUT" | jq -r .reason | grep -q "<repete-done>"'
+
+echo "== Coupling lock: templates/gauntlet.md carries the phrases the tests grep =="
+while IFS= read -r phrase; do
+  ck "gauntlet template has: $phrase" "grep -qF \"$phrase\" \"$ROOT/templates/gauntlet.md\""
+done < <(printf '%s\n' 'parts.md' 'critic' 'final integration')
 
 echo "== Coupling lock: templates/handoff.md headings match the hook's scaffolding-strip list =="
 # The pass-2 "was the handoff actually filled?" test strips the template's own

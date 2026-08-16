@@ -40,9 +40,9 @@ Two kinds of code live here and they fail differently:
    `stale_limit` consecutive mismatches yields `paused-stale`) → max-
    iterations yield (skipped while `summarizing`) → context-budget two-step → stranded-
    `summarizing` recovery (re-applies the cap) → bump iteration → assemble re-inject
-   (body → [stale note] → catalog → constitution → protocol last). Do not reorder without
-   re-deriving why each earlier check must precede the later ones — the inline comments
-   state the reason at each site.
+   (body → [stale note] → catalog → constitution → [gauntlet rules] → protocol last). Do
+   not reorder without re-deriving why each earlier check must precede the later ones —
+   the inline comments state the reason at each site.
 2. **`.repete/loop.local.md` frontmatter schema** — the shared contract between the
    hook, the statusline, all four commands, and the tests. Adding a key means updating:
    the template, `commands/repete.md` scaffold instructions, the hook's `fm` reads, and
@@ -91,6 +91,8 @@ If you add a check, decide its failure direction first and write it in a comment
 | `loop.local.md` frontmatter keys | Hook `fm` reads, `commands/repete.md` scaffold, `/repete-status`, test `scaffold()` | tests use the schema throughout |
 | Status values | Hook early-exit case, `/repete-continue` branches, `/repete-status` map | tests: paused/terminal blocks |
 | `stale_count`/`stale_limit` keys | Hook `fm` reads + mismatch branch, `templates/loop.local.md`, `/repete` scaffold prose, `/repete-status` budgets line, `/repete-continue` paused-stale branch | tests: stale blocks |
+| `gauntlet`/`reference`/`bar` keys | Hook `fm` read + gauntlet injection block, `templates/loop.local.md`, `/repete` optional-features, `/repete-status` gauntlet section, tests scaffold comment | tests: gauntlet blocks |
+| `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the test coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md" |
 | Sentinel strings | Hook, protocol, all commands, README, both skills | tests grep re-inject for both |
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
@@ -105,6 +107,17 @@ If you add a check, decide its failure direction first and write it in a comment
   reads `STALE_NOTE` — under `set -u` an init placed inside the guard crashes every
   summarizing-path Stop. Same trap applies to any future variable set inside a guarded
   block but consumed after it.
+- **`fm()` reads the FIRST occurrence of a key; the test `scaffold()` only APPENDS.** A
+  default value seeded in the scaffold plus a `scaffold 'key: override'` extra yields two
+  keys and the hook silently reads the default — the exact trap the backstop tests'
+  comment warns about, rediscovered for `gauntlet`. Seed nothing you intend to override;
+  use `setstate` to mutate.
+- **`GAUNTLET_FALLBACK` mirrors `PROTO_FALLBACK`** (and `critique.md`'s pointer is
+  first-line-only): the loop must never silently lose its working rules when the template
+  is unreadable, and the critique pointer stays metadata — injecting critique bodies every
+  iteration would re-create the context rot the catalog rules fight. The critique pointer
+  is appended to the TEMPLATE text, so the fallback lacks it — acceptable: the fallback's
+  job is round discipline, not verdict recall.
 - **`set_fm` updates only the first frontmatter block and appends missing keys before
   the closing `---`** (C1/C2/C3 in the comments). It uses `awk -v`, which treats
   backslashes in values as escapes — fine for everything written today (statuses,

@@ -12,8 +12,9 @@ both off by default so a bare loop stays quiet. It reuses the
 reinventing it.
 
 This is **v0.2.0** — a single evolving loop with opt-in autonomous mode, opt-in project-local
-lessons, and mismatch-feedback on done-claims. Multi-phase mission chaining (v2) and
-cross-project global learning (v3) build on the same state model.
+lessons, mismatch-feedback on done-claims, and opt-in gauntlet (builder/critic) rounds.
+Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
+same state model.
 
 ## How it works
 
@@ -52,6 +53,25 @@ Three safety yields also stop the autonomous run and hand control back:
 So: iterations run unattended; **you are only in the loop at transitions** — exactly where
 drift and bad decisions compound.
 
+## Gauntlet mode (opt-in): builder/critic rounds against a reference
+
+`gauntlet: true` (with `reference:` — a concrete example of "great" — and `bar:` — one line
+naming what "reached the bar" means) turns iterations into reference-driven improvement
+rounds. The hook injects the working rules; the **agent** runs the pattern with subagents:
+
+1. Split the artifact into the smallest independently judgeable parts (`.repete/parts.md`).
+2. One builder subagent per part — part, criterion, file paths, nothing else.
+3. Every round: ONE fresh-context critic that blind-compares this round vs. the previous
+   (`git show`, unlabeled) against the reference and names the single largest gap.
+   Verdict → `.repete/critique.md`; its first line rides the next re-inject.
+4. The gap is the next round's top priority; when every part meets the bar, one final
+   integration critic over the whole artifact precedes any `<repete-done>` claim.
+
+The loop engine is untouched — no new exit paths, fail-open preserved; a critic never gates
+the done sentinel, and subagent sentinels were already ignored. Rounds stop on the existing
+budgets (`max_iterations` = rounds, `context_budget_lines`, `stale_limit`) or when you stop
+the run.
+
 ## Commands
 
 | Command            | Purpose                                                            |
@@ -80,10 +100,12 @@ operational and design judgment, so the commands stay terse:
 ```
 .repete/
 ├── MISSION.md        # north star + the verifiable mission goal (the <repete-done> string)
-├── loop.local.md     # frontmatter (phase/iteration/status/budgets) + current loop payload
+├── loop.local.md     # frontmatter (phase/iteration/status/budgets/flags) + current loop payload
 ├── todo-next.md      # out-of-scope discoveries — seeds the next loop (only if todo_next_enabled)
 ├── transition.md     # the agent's proposed next payload, awaiting your approval
 ├── handoff.md        # in-flight snapshot written at a context checkpoint, read on rehydrate
+├── parts.md          # gauntlet only: part · judgeable criterion · status
+├── critique.md       # gauntlet only: last critic verdict (first line = WINNER)
 └── lessons/          # one card per mistake/insight; retrieved into future loops (only if lessons_enabled)
 ```
 
@@ -117,7 +139,11 @@ constitution, and the frozen protocol, keeping each iteration quiet:
    (don't-touch dirs, "keep the public API stable", conventions). Injected with HTML
    comments stripped, only if it has real content — an unfilled comments-only starter
    is skipped, so it isn't pure bloat.
-4. **Engine protocol** — `templates/protocol.md`, the loop's standing rules (work from
+4. **Gauntlet working rules** *(only when `gauntlet: true`)* — `templates/gauntlet.md`:
+   the builder/critic round discipline, plus a one-line pointer to the last critic
+   verdict in `.repete/critique.md`. Falls back to an inline core if the template is
+   unreadable (fail-functional, like the protocol).
+5. **Engine protocol** — `templates/protocol.md`, the loop's standing rules (work from
    files, emit sentinels only when honest). Hook-owned, always injected **last** so the
    binding rules aren't buried under the payload. Falls back to an inline core if the
    template is unreadable (fail-functional — never lose the two sentinels).

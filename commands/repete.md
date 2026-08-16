@@ -55,8 +55,10 @@ Create, in the project root:
   - `lesson_catalog_cap`: max lesson lines surfaced in the catalog each iteration
     (default 8; 0 = uncapped — only for small projects). Only relevant when
     `lessons_enabled: true`.
-  - `lessons_enabled`, `todo_next_enabled`, `autonomous`: all default `false`. See
-    *Optional features* below before changing them.
+  - `lessons_enabled`, `todo_next_enabled`, `autonomous`, `gauntlet`: all default
+    `false`. See *Optional features* below before changing them. When gauntlet is on,
+    also fill `reference` (path or URL to the concrete example of "great") and `bar`
+    (one line: what the critic treats as "reached the bar").
   - `started_at`: output of `date -u +%Y-%m-%dT%H:%M:%SZ`.
   - `status: running`, `active: true`, `phase: 1`, `iteration: 1`.
   Fill the body with this loop's exit goal + working brief.
@@ -83,7 +85,7 @@ loop is already running (offer `/repete-status` or `/repete-cancel`).
 
 ### Optional features (default OFF — keep the loop quiet)
 
-Three frontmatter flags gate behavior that is off by default. Don't enable them unless
+Four frontmatter flags gate behavior that is off by default. Don't enable them unless
 the user wants what they add:
 
 - **`lessons_enabled`** / **`todo_next_enabled`** — each adds a per-iteration journaling
@@ -104,6 +106,18 @@ the user wants what they add:
   Note the other limit: a Stop hook cannot `/clear` itself, so an autonomous loop still pauses
   at the `context_budget_lines` boundary for a human `/clear` — autonomy removes the
   *checkpoint* gate, not the *context* gate.
+- **`gauntlet`** — builder/critic rounds against a reference. When `true`, the hook injects
+  gauntlet working rules each iteration (from `templates/gauntlet.md`): the agent maintains
+  `.repete/parts.md` (part · judgeable criterion · status), dispatches one builder subagent
+  per part, and every round dispatches ONE fresh-context critic that blind-compares this
+  round vs. the previous (via `git show`, unlabeled) against the reference and names the
+  largest gap; the verdict lands in `.repete/critique.md` and its first line (the WINNER)
+  rides the next re-inject. Offer it when the mission has an ambitious quality bar AND a
+  concrete example of "great" exists (`reference:` — a path, repo, or URL the agent can
+  read) — without a reference there is nothing to A/B against, so keep it off. Requires
+  `bar:` too (one line). When enabled, also create `.repete/parts.md` (header line only)
+  and `.repete/critique.md` (empty) as seeds. Composes with `autonomous` — rounds then run
+  unattended between budgets.
 
 ## 3. Confirm, then begin
 

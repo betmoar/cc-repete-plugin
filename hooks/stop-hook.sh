@@ -151,6 +151,7 @@ MISSION_GOAL="$(fm mission_goal)"
 LESSONS_ENABLED="$(fm lessons_enabled)";     [[ "$LESSONS_ENABLED" == "true" ]]   || LESSONS_ENABLED=false
 TODO_NEXT_ENABLED="$(fm todo_next_enabled)"; [[ "$TODO_NEXT_ENABLED" == "true" ]] || TODO_NEXT_ENABLED=false
 AUTONOMOUS="$(fm autonomous)";               [[ "$AUTONOMOUS" == "true" ]]        || AUTONOMOUS=false
+GAUNTLET="$(fm gauntlet)";                   [[ "$GAUNTLET" == "true" ]]          || GAUNTLET=false
 
 # ---- autonomous safety backstop ------------------------------------------
 # Autonomous loops force HAS_CHECKPOINT=0 (below), so the per-loop checkpoint
@@ -438,11 +439,43 @@ if [[ "$LESSONS_ENABLED" == "true" ]]; then
 fi
 PROTO+="$RULES_EXTRA"
 
-# --- assemble re-inject: brief, [stale note], [catalog], [constitution], protocol LAST ---
+# --- gauntlet working rules (opt-in builder/critic rounds) ------------------
+# Failure direction: every path degrades to "no gauntlet rules injected" — never
+# to a blocked Stop or a new exit. Bad flag -> off (read above); unreadable
+# template -> GAUNTLET_FALLBACK (fail-functional, same philosophy as
+# PROTO_FALLBACK: the loop must never silently lose its working rules); missing
+# critique.md -> no pointer line. Sidechain guard already makes stray sentinels
+# from builder/critic subagents harmless.
+GAUNTLET_RULES=""
+if [[ "$GAUNTLET" == "true" ]]; then
+  GAUNTLET_FALLBACK='
+--- gauntlet working rules (builder/critic rounds · reference-driven) ---
+Maintain .repete/parts.md (part · judgeable criterion · status). One builder subagent per
+part — give it the part, the criterion, the paths, nothing else; never two builders on one
+file. Integrate on the main thread. Every round: ONE fresh-context critic subagent gets the
+reference, this round and the previous round via git show (unlabeled), the parts list, the
+bar — never your reasoning. It picks a winner and names the single largest gap; write its
+verdict to .repete/critique.md, first line WINNER: <round>|none. The named gap is the next
+round'"'"'s top priority. When every part reaches the bar: ONE final integration critic over
+the whole artifact. Only claim <repete-done> after that final integration pass agrees the
+mission goal is verifiably true.'
+  GAUNTLET_RULES=""
+  [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && GAUNTLET_RULES="$(cat "${CLAUDE_PLUGIN_ROOT}/templates/gauntlet.md" 2>/dev/null)"
+  [[ -n "$GAUNTLET_RULES" ]] || GAUNTLET_RULES="$GAUNTLET_FALLBACK"
+  # Last critic verdict pointer: first line only (WINNER: ...) — metadata, not a body;
+  # injecting the whole critique every iteration would re-create the context rot the
+  # catalog rules fight. Missing/empty file -> no pointer, rules still injected.
+  if [[ -s "$REPETE_DIR/critique.md" ]]; then
+    GAUNTLET_RULES+="$(printf '\nLast critic verdict (.repete/critique.md): %s\n' "$(head -1 "$REPETE_DIR/critique.md" 2>/dev/null)")"
+  fi
+fi
+
+# --- assemble re-inject: brief, [stale note], [catalog], [constitution], [gauntlet], protocol LAST ---
 REINJECT="$PAYLOAD_BODY"
 [[ -n "$STALE_NOTE" ]] && REINJECT+=$'\n\n'"$STALE_NOTE"
 [[ -n "$CATALOG" ]] && REINJECT+=$'\n\n'"$CATALOG"
 [[ -n "$CONSTITUTION" ]] && REINJECT+=$'\n\n--- project invariants (.repete/constitution.md) ---\n'"$CONSTITUTION"
+[[ -n "$GAUNTLET_RULES" ]] && REINJECT+=$'\n\n'"$GAUNTLET_RULES"
 REINJECT+=$'\n'"$PROTO"
 
 SYSMSG="🔄 repete · phase ${PHASE} · iteration ${NEXT}"

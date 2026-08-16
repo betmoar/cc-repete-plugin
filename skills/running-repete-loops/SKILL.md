@@ -84,7 +84,7 @@ the rails; a sprawling contradictory one quietly erodes adherence.
 
 ## Optional features — off by default
 
-Three frontmatter flags in `loop.local.md` gate behavior that is **off by default**, because each
+Four frontmatter flags in `loop.local.md` gate behavior that is **off by default**, because each
 adds re-injected text or removes a safety gate. Turn them on deliberately, not reflexively:
 
 - **`lessons_enabled: false`** — when on, the hook injects the lessons catalog each iteration and
@@ -96,6 +96,8 @@ adds re-injected text or removes a safety gate. Turn them on deliberately, not r
   side-quests, so it stays focused on the exit goal. Turn it on when harvesting a backlog *is* the
   point.
 - **`autonomous: false`** — see below.
+- **`gauntlet: false`** — see *Gauntlet runs* below. Builder/critic rounds against a reference;
+  only meaningful when a concrete example of "great" exists.
 
 The default-off stance is the fix for the loop being too chatty: a bare loop re-injects only the
 brief + constitution + the frozen core protocol (re-read, constitution, the `<repete-done>`
@@ -117,6 +119,46 @@ Two consequences to design for:
    `designing-autonomous-loops` on the hook-spine constraint), so even an autonomous loop still
    pauses at `context_budget_lines` for a human `/clear` + `/repete-continue`. Autonomy removes the
    *checkpoint* gate, not the *context* gate — budget your run accordingly.
+
+## Gauntlet runs — builder/critic rounds against a reference
+
+`gauntlet: true` turns iterations into reference-driven improvement rounds. The hook injects the
+gauntlet working rules each iteration (from `templates/gauntlet.md`); the agent — not the hook —
+runs the pattern with its own subagents. The loop engine (budgets, sentinels, done-detection)
+is untouched: a critic never gates the done sentinel, and stray sentinels from builder/critic
+subagents are already ignored by the sidechain guard.
+
+Prerequisites, both required or keep it off:
+
+- **`reference:`** — a concrete example of "great" the agent can actually read (path, repo, URL).
+  No reference → nothing to A/B against → the rounds are theater.
+- **`bar:`** — one line stating what "reached the bar" means. This is the critic's stop
+  criterion, not the mission goal.
+
+The round discipline (one round ≈ one iteration ≈ one commit):
+
+1. The lead maintains `.repete/parts.md` — part · judgeable criterion · status. Finely split
+   enough that each part can be judged on its own.
+2. Each open part goes to ONE builder subagent (part + criterion + paths, nothing else). Never
+   two builders on one file. The main thread integrates — the lead is not a builder.
+3. Every round gets ONE critic subagent with a **fresh context**: it receives the reference,
+   `git show` of the current and previous round *unlabeled* (blind A/B — it must not know which
+   is newer), the parts list, and the bar. It never sees the lead's or builders' reasoning —
+   that's the whole point of separation.
+4. The critic picks a winner and names the single largest meaningful gap vs. the reference.
+   Verdict → `.repete/critique.md` (overwritten each round), first line `WINNER: <round>` or
+   `WINNER: none`. The hook injects that first line into the next re-inject so the lead opens
+   the round already knowing the verdict.
+5. The named gap is the next round's top priority. Rounds repeat until every part meets the
+   bar, a budget fires (`max_iterations` = rounds, `context_budget_lines`, `stale_limit`), or
+   you stop the run — the Gauntlet's own stopping rule, mapped onto existing budgets.
+6. When every part is at the bar: ONE final integration critic over the whole artifact. Only
+   after it agrees is the mission goal claimable. `<repete-done>` still requires the exact
+   goal-string match — the critic shapes the work, the sentinel stays the exit.
+
+Critic-packet hygiene is where these runs succeed or rot: the critic that gets the builder's
+justifications stops judging the artifact and starts grading homework. Same failure mode as a
+vague mission goal — guard the packet, not the prompt.
 
 ## Authoring lesson cards
 

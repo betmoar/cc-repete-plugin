@@ -16,8 +16,8 @@ Present a compact report:
 
 - **Mission goal** and whether it looks met (your read — do not auto-complete it).
 - **Phase / iteration**, `status`, `active`.
-- **Flags**: `lessons_enabled`, `todo_next_enabled`, `autonomous` (each on/off). In
-  autonomous mode, note the loop runs past checkpoints to the mission (no `<repete-checkpoint>`
+- **Flags**: `lessons_enabled`, `todo_next_enabled`, `autonomous`, `gauntlet` (each on/off).
+  In autonomous mode, note the loop runs past checkpoints to the mission (no `<repete-checkpoint>`
   pause).
 - **This loop's exit goal** (from the loop body).
 - **Budgets**: `max_iterations`, `context_budget_lines`, plus `stale_count`/`stale_limit`
@@ -33,6 +33,9 @@ Present a compact report:
 - **Constitution**: report whether `.repete/constitution.md` exists and has real content
   (not just the commented starter); if it is large (well over ~40 lines combined with the
   protocol), warn that long frozen layers degrade adherence (rule count is the killer).
+- **Gauntlet** (only if `gauntlet: true`): `reference` and `bar`; parts progress from
+  `.repete/parts.md` (done/total + any stuck in `doing`); first line of
+  `.repete/critique.md` (the last round's WINNER) plus the named largest gap.
 - **What to do next**, mapped from `status`:
   - `running` → loop is live; it will continue on the next Stop.
   - `summarizing` → transient: the hook is having the agent write `.repete/handoff.md`

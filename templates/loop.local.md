@@ -7,6 +7,9 @@ max_iterations: 0
 context_budget_lines: 2500
 stale_count: 0
 stale_limit: 3
+gauntlet: false
+reference: ""
+bar: ""
 lesson_catalog_cap: 8
 lessons_enabled: false
 todo_next_enabled: false
