@@ -407,6 +407,18 @@ CAT="$(printf '%s' "$OUT" | jq -r .reason | sed -n '/Known lessons/,/more — gr
 ck "F11: tab in tags sanitized, columns intact" 'printf "%s\n" "$CAT" | grep -qE "tab-card +\[a-b\] high +hits:3"'
 ck "F12: # in tags preserved (issue refs)"      'printf "%s\n" "$CAT" | grep -qE "hash-card +\[parser,#123\] medium +hits:2"'
 
+echo "== Review: tags-line template comment stripped; # inside brackets kept; slug tab =="
+scaffold 'lessons_enabled: true'
+rm -f "$TMP/.repete/lessons/001-foo-trap.md"
+printf -- '---\nslug: tpl-card\ntags: [jest, esm]   # used to decide which lessons to surface\nseverity: high\nhits: 2\n---\nbody\n' > "$TMP/.repete/lessons/012-tpl.md"
+printf -- '---\nslug: sl\tug-tab\ntags: [a]\nseverity: medium\nhits: 1\n---\nbody\n' > "$TMP/.repete/lessons/013-slugtab.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+CAT="$(printf '%s' "$OUT" | jq -r .reason | sed -n '/Known lessons/,/more — grep/p')"
+ck "template tags comment stripped, not leaked" '! printf "%s\n" "$CAT" | grep -q "usedtodecide"'
+ck "template tags content preserved"            'printf "%s\n" "$CAT" | grep -qE "tpl-card +\[jest,esm\] high +hits:2"'
+ck "tab in slug sanitized, columns intact"      'printf "%s\n" "$CAT" | grep -qE "sl-ug-tab +\[a\] medium +hits:1"'
+
 echo "== I2-stale: checkpoint + mismatched done in one message -> checkpoint wins, no count =="
 scaffold ""
 mktx "<repete-checkpoint>next payload</repete-checkpoint> and <repete-done>nope</repete-done>"
@@ -606,6 +618,18 @@ ck "compose: constitution present" 'printf "%s" "$OUT" | jq -r .reason | grep -q
 ck "compose: catalog present"      'printf "%s" "$OUT" | jq -r .reason | grep -q "Known lessons"'
 ck "compose: gauntlet present"     'printf "%s" "$OUT" | jq -r .reason | grep -q "gauntlet working rules"'
 ck "compose: protocol still LAST"  'printf "%s" "$OUT" | jq -r .reason | grep -q "<repete-done>"'
+
+# Position lock (review finding): the documented assembly order
+# body -> [stale note] -> catalog -> constitution -> gauntlet -> protocol LAST
+# is load-bearing (CLAUDE.md); assert by LINE ORDER of each layer's marker.
+posline(){ printf '%s' "$OUT" | jq -r .reason | awk -v m="$1" 'index($0,m){print NR; exit}'; }
+POS_BODY="$(posline "do the slice")"
+POS_CAT="$(posline "Known lessons")"
+POS_CONST="$(posline "project invariants")"
+POS_GAUNT="$(posline "gauntlet working rules")"
+POS_PROTO="$(posline "repete standing rules")"
+ck "order: body < catalog < constitution < gauntlet < protocol" \
+   '[ -n "$POS_BODY" ] && [ -n "$POS_CAT" ] && [ -n "$POS_CONST" ] && [ -n "$POS_GAUNT" ] && [ -n "$POS_PROTO" ] && [ "$POS_BODY" -lt "$POS_CAT" ] && [ "$POS_CAT" -lt "$POS_CONST" ] && [ "$POS_CONST" -lt "$POS_GAUNT" ] && [ "$POS_GAUNT" -lt "$POS_PROTO" ]'
 
 echo "== Coupling lock: templates/gauntlet.md carries the phrases the tests grep =="
 while IFS= read -r phrase; do

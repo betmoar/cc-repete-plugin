@@ -79,12 +79,13 @@ emit() { jq -n --arg m "$1" '{systemMessage:$m}'; }
 # leading <!-- ... --> comment BEFORE its '---' block, so key off the first
 # '---'-delimited block (f==1), exactly as the state-file reader does.
 card_field() { # file key
-  # Strip the "key: " prefix, then any trailing " # comment" — but ONLY for keys
-  # where a comment is plausible template scaffolding (severity/hits carry them;
-  # the shipped template's inline comments live on those lines). Stripping "#"
-  # from TAGS truncated issue references like "#123" (audit F12), so tags keep
-  # their #. Tabs are normalized to "-" (audit F11): the catalog row is
-  # tab-delimited, so a literal tab in a field shifted every column after it.
+  # Strip the "key: " prefix, then any trailing " # comment" AFTER the value
+  # (the shipped lesson-card template carries inline comments on several
+  # frontmatter lines — severity, hits, AND tags). For tags the strip must stop
+  # at the closing ']': a '#' INSIDE the brackets is content (issue refs like
+  # "#123", audit F12), only a comment after ']' is scaffolding. Tabs are
+  # normalized to "-" in every field (audit F11 + review): the catalog row is
+  # tab-delimited, so a literal tab in ANY field shifts every column after it.
   local k="$2"
   local val
   val="$(awk -v k="$k" '
@@ -96,17 +97,20 @@ card_field() { # file key
     }
     f>=2{exit}
   ' "$1")"
-  case "$k" in
-    tags)
-      val="$(printf '%s' "$val" | tr '\t' '-')"
-      ;;
-    severity|hits)
-      # awk, not sed: BSD sed lacks '\+' in BRE, GNU lacks -E parity — awk is
-      # portable and already a dependency.
-      val="$(printf '%s' "$val" | awk '{sub(/[ \t]+#.*$/, ""); print}')"
-      ;;
-  esac
-  printf '%s' "$val" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+  # awk, not sed: BSD sed lacks '\+' in BRE, GNU lacks -E parity — awk is
+  # portable and already a dependency. tags are handled separately below
+  # (bracket-internal '#' is content, not comment).
+  if [[ "$k" != "tags" ]]; then
+    val="$(printf '%s' "$val" | awk '{sub(/[ \t]+#.*$/, ""); print}')"
+  else
+    # Keep '#' INSIDE the brackets ("#123" issue refs); strip only a comment
+    # AFTER the closing ']' (the template's own "  # used to decide..." line).
+    val="$(printf '%s' "$val" | awk '{
+      if (match($0, /\][ \t]+#/)) { print substr($0, 1, RSTART-1); exit }
+      print; exit
+    }')"
+  fi
+  printf '%s' "$val" | tr '\t' '-' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
 # Build a metadata-only catalog: one line per valid card, ranked severity

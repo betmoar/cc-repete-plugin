@@ -33,8 +33,9 @@ Two kinds of code live here and they fail differently:
 1. **`hooks/stop-hook.sh` — the decision order.** The checks run in a deliberate
    sequence, and most of the subtle guarantees live in that ordering, not in any single
    check: state-file exists → jq exists (else fail open) → `active` → terminal/paused
-   statuses exit → session isolation (stamp on first sight) → autonomous no-budget
-   backstop → read last main-thread assistant message → sentinel handling (suppressed
+   statuses exit → session isolation (stamp on first sight) → no-budget backstop
+   (any active loop with both budgets 0 — gated included) → read last main-thread
+   assistant message → sentinel handling (suppressed
    while `summarizing`; checkpoint beats done; autonomous ignores checkpoint; a
    mismatched done-claim counts toward `stale_count`, annotates the re-inject, and at
    `stale_limit` consecutive mismatches yields `paused-stale`) → max-
@@ -89,7 +90,7 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/handoff.md` section headings | Hook pass-1 re-inject brief AND pass-2 scaffolding-strip pattern | test: "Coupling lock: templates/handoff.md headings" |
 | `templates/protocol.md` placeholders | Hook substitution + `PROTO_FALLBACK` | test: "Protocol placeholders" |
 | `loop.local.md` frontmatter keys | Hook `fm` reads, `commands/repete.md` scaffold, `/repete-status`, test `scaffold()` | tests use the schema throughout |
-| Status values | Hook early-exit case, `/repete-continue` branches, `/repete-status` map | tests: paused/terminal blocks |
+| Status values | Hook early-exit case, `/repete-continue` branches, `/repete-status` map, statusline `case` (renders `·ck/·ctx/·max/·stale` markers — a new status silently renders as healthy) | tests: paused/terminal blocks |
 | `stale_count`/`stale_limit` keys | Hook `fm` reads + mismatch branch, `templates/loop.local.md`, `/repete` scaffold prose, `/repete-status` budgets line, `/repete-continue` paused-stale branch | tests: stale blocks |
 | `gauntlet`/`reference`/`bar` keys | Hook `fm` read + gauntlet injection block, `templates/loop.local.md`, `/repete` optional-features, `/repete-status` gauntlet section, tests scaffold comment | tests: gauntlet blocks |
 | `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the test coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md" |
@@ -115,9 +116,9 @@ If you add a check, decide its failure direction first and write it in a comment
 - **`GAUNTLET_FALLBACK` mirrors `PROTO_FALLBACK`** (and `critique.md`'s pointer is
   first-line-only): the loop must never silently lose its working rules when the template
   is unreadable, and the critique pointer stays metadata — injecting critique bodies every
-  iteration would re-create the context rot the catalog rules fight. The critique pointer
-  is appended to the TEMPLATE text, so the fallback lacks it — acceptable: the fallback's
-  job is round discipline, not verdict recall.
+  iteration would re-create the context rot the catalog rules fight. The pointer is
+  appended AFTER the template/fallback resolution, so BOTH paths carry it when
+  critique.md exists (verified by review).
 - **`set_fm` updates only the first frontmatter block and appends missing keys before
   the closing `---`** (C1/C2/C3 in the comments). It uses `awk -v`, which treats
   backslashes in values as escapes — fine for everything written today (statuses,
@@ -186,12 +187,11 @@ If you add a check, decide its failure direction first and write it in a comment
    `set_fm`'s awk -v backslash mangling (UUID-safe today — switch to ENVIRON if free-text
    values ever land in frontmatter); set_fm C3 append no-ops on a state file missing its
    closing `---` (backstop re-warns every Stop); bare `paused` status vestige (no writer,
-   no resume branch — remove or wire); gauntlet `[[ -s critique.md ]]` true for a
-   directory (empty-verdict pointer — guard with `-f` if it ever bites); the
-   "keep/!update" garble lineage in repete-continue step 4 (fixed wording, watch
-   regressions); missing tests for no-jq exit-0, stranded-summarizing cap re-application,
-   transition.md content; ck `jq | grep -q` SIGPIPE false-FAIL on >64KB payloads
-   (dormant under current fixtures — switch to `jq -e` predicates when touched).
+   no resume branch — remove or wire); the "keep/!update" garble lineage in
+   repete-continue step 4 (fixed wording, watch regressions); missing tests for no-jq
+   exit-0 and stranded-summarizing cap re-application; ck `jq | grep -q` SIGPIPE
+   false-FAIL on >64KB payloads (dormant under current fixtures — switch to `jq -e`
+   predicates when touched).
 
 ## Operator
 
