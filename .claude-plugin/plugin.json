@@ -1,7 +1,7 @@
 {
   "name": "cc-repete",
   "version": "0.2.0",
-  "description": "Self-evolving autonomous loops for Claude Code. Ralph-style iteration with an evolving payload, human-gated transitions (or opt-in autonomous mode), context-rot checkpoints, and opt-in TODO_NEXT harvesting, a project lesson library. Reuses the remember plugin for memory.",
+  "description": "Self-evolving autonomous loops for Claude Code. Ralph-style iteration with an evolving payload, human-gated transitions (or opt-in autonomous mode), context-rot checkpoints, and opt-in TODO_NEXT harvesting + a project lesson library. Reuses the remember plugin for memory.",
   "author": {
     "name": "redux"
   },

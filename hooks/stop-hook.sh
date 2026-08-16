@@ -9,7 +9,7 @@
 #   3. <repete-checkpoint>...</repete-checkpoint> present      -> yield to user for approval
 #   4. otherwise                                                -> block + re-inject (autonomous)
 #
-# Plus two safety yields that also stop autonomous looping:
+# Plus three safety yields that also stop autonomous looping:
 #   - max_iterations reached
 #   - stale_limit consecutive mismatched done-claims (paused-stale)
 #   - context_budget_lines exceeded  -> two-step yield: first re-inject one turn
@@ -519,7 +519,9 @@ mission goal is verifiably true.'
   # Last critic verdict pointer: first line only (WINNER: ...) — metadata, not a body;
   # injecting the whole critique every iteration would re-create the context rot the
   # catalog rules fight. Missing/empty file -> no pointer, rules still injected.
-  if [[ -s "$REPETE_DIR/critique.md" ]]; then
+  # -f AND -s: '-s' alone is true for a directory, which would append a bogus
+  # empty-verdict pointer and run head on a directory (audit cut + Copilot review).
+  if [[ -f "$REPETE_DIR/critique.md" && -s "$REPETE_DIR/critique.md" ]]; then
     GAUNTLET_RULES+="$(printf '\nLast critic verdict (.repete/critique.md): %s\n' "$(head -1 "$REPETE_DIR/critique.md" 2>/dev/null)")"
   fi
 fi

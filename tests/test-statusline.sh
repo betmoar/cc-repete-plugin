@@ -89,7 +89,8 @@ ck "shows rp[3/11] for 011 (not 9)" '[ "$OUT" = "rp[3/11]" ]'
 
 echo "== Quoted values: parity with the hook's fm() (audit F9) =="
 mkstate true 3 10
-sed -i '' 's/^active: true/active: "true"/; s/^iteration: 3/iteration: "3"/; s/^max_iterations: 10/max_iterations: "10"/' "$TMP/.repete/loop.local.md"
+# perl -i (not sed -i ''): BSD/GNU-portable, same approach as the CRLF block above
+perl -i -pe 's/^active: true/active: "true"/; s/^iteration: 3/iteration: "3"/; s/^max_iterations: 10/max_iterations: "10"/' "$TMP/.repete/loop.local.md"
 OUT="$(run)"
 ck "quoted active/iter/max still render rp[3/10]" '[ "$OUT" = "rp[3/10]" ]'
 
