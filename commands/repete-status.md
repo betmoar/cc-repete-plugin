@@ -14,7 +14,8 @@ Render the current loop state. Read-only — change nothing.
 
 Present a compact report:
 
-- **Mission goal** and whether it looks met (your read — do not auto-complete it).
+- **Mission goal** (read the exact `mission_goal` string from the frontmatter) and whether
+  it looks met (your read — do not auto-complete it).
 - **Phase / iteration**, `status`, `active`.
 - **Flags**: `lessons_enabled`, `todo_next_enabled`, `autonomous`, `gauntlet` (each on/off).
   In autonomous mode, note the loop runs past checkpoints to the mission (no `<repete-checkpoint>`
@@ -50,3 +51,5 @@ Present a compact report:
     is wrong (fix it in `loop.local.md` + `MISSION.md`) or the work truly isn't done.
     Then `/repete-continue` (resets the count) or `/repete-cancel`.
   - `done` / `active:false` → finished; `/repete` to start a new run.
+  - `cancelled` → stopped via `/repete-cancel`; state preserved for review. `/repete`
+    will ask before overwriting it (or archive `.repete/` first).

@@ -37,6 +37,10 @@ They're the wrong tool when:
 
 Loops shine for: migrations (N files, same transform), test-until-green, broad sweeps/audits,
 "keep going until this command exits 0" — work that's mechanical to verify but long to do.
+The exit signals themselves are literals the harness watches for: `<repete-done>` with the
+exact mission-goal string ends the run; `<repete-checkpoint>` yields a human gate
+(repete's spellings — other harnesses use their own markers, but the design shape is
+"sentinel string + strict match", and a paraphrased sentinel is invisible to the engine).
 
 ## Second decision: single-session vs. fresh-process
 

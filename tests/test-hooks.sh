@@ -549,7 +549,56 @@ ck "F4: /repete-continue paused-context handles cap" \
 ck "F6: /repete guards on existing .repete (any state)" \
    'awk "/already exists/,/repete-status/" "$ROOT/commands/repete.md" | grep -q "done\|cancelled\|terminal\|any"'
 
-# --- invariant lock ---------------------------------------------------------
+echo "== Golden: default-config re-inject is byte-identical across runs =="
+# Decline #2 from the review panel, addressed: no golden output existed to prove
+# default-config behavior is unchanged. The hook's default-path output is fully
+# deterministic (phase/iteration counters, no timestamps), so byte-compare two
+# independent runs of the same fixture AND lock the exact content — any future
+# change to the default re-inject (new rule, reworded protocol, reordered layer)
+# must update this golden deliberately.
+scaffold ""
+mktx "did some work"
+G_OUT1="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"GOLD\"}")"
+# second run with a FRESH scaffold (same fixture, rebuilt) — proves the output is
+# a function of the fixture, not of leftover state
+scaffold ""
+mktx "did some work"
+G_OUT2="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"GOLD\"}")"
+ck "golden: two independent runs byte-identical" '[ "$G_OUT1" = "$G_OUT2" ]'
+ck "golden: shape is block, single section marker" \
+   'printf "%s" "$G_OUT1" | jq -e ".decision==\"block\"" >/dev/null && [ "$(printf "%s" "$G_OUT1" | jq -r .reason | grep -c "^---")" -eq 1 ]'
+G_REASON_LINES="$(printf '%s' "$G_OUT1" | jq -r .reason | wc -l | tr -d ' ')"
+ck "golden: re-inject line count locked (7)" '[ "$G_REASON_LINES" -eq 7 ]'
+G_REASON_SHA="$(printf '%s' "$G_OUT1" | jq -r .reason | shasum | cut -d" " -f1)"
+ck "golden: re-inject content hash locked" '[ "$G_REASON_SHA" = "$(cat "$ROOT/tests/golden-default-reinject.sha" 2>/dev/null)" ]'
+
+echo "== Doc-lock: every documented status value exists in all coupled sites =="
+# Decline #3 from the review panel, addressed: the couplings table's "grep manually"
+# column is now locked for the mechanical part — each status value the docs promise
+# must appear in every site the table names for it. A new status that skips a site,
+# or a renamed one that leaves a site behind, fails here.
+for st in paused-checkpoint paused-context paused-max paused-stale 'done' cancelled summarizing running; do
+  ck "doc-lock: '$st' in hook early-exit or status write"  "grep -q '$st' \"$H\""
+  ck "doc-lock: '$st' in /repete-status map"               "grep -q '$st' \"$ROOT/commands/repete-status.md\""
+done
+for st in paused-checkpoint paused-context paused-max paused-stale; do
+  ck "doc-lock: '$st' in /repete-continue branches"        "grep -q '$st' \"$ROOT/commands/repete-continue.md\""
+done
+# sentinel spellings — mirror the ACTUAL contract: <repete-done> lives in the frozen
+# protocol core; <repete-checkpoint> is deliberately NOT in protocol.md (the frozen core
+# stays quiet in autonomous mode — the rule rides RULES_EXTRA). Both must appear in the
+# hook and README; each must appear in at least the running skill + one command.
+ck "doc-lock: <repete-done> in protocol + hook + README + running skill + a command" \
+   'grep -q "<repete-done>" "$ROOT/templates/protocol.md" && grep -q "<repete-done>" "$H" && grep -q "<repete-done>" "$ROOT/README.md" && grep -q "<repete-done>" "$ROOT/skills/running-repete-loops/SKILL.md" && grep -q "<repete-done>" "$ROOT/commands/repete.md"'
+ck "doc-lock: <repete-checkpoint> in hook + README + running skill + repete-continue" \
+   'grep -q "<repete-checkpoint>" "$H" && grep -q "<repete-checkpoint>" "$ROOT/README.md" && grep -q "<repete-checkpoint>" "$ROOT/skills/running-repete-loops/SKILL.md" && grep -q "<repete-checkpoint>" "$ROOT/commands/repete-continue.md"'
+# frontmatter keys the docs promise
+for key in stale_count stale_limit gauntlet reference bar max_iterations context_budget_lines mission_goal; do
+  ck "doc-lock: '$key' in template frontmatter + /repete scaffold prose + /repete-status" \
+     "grep -q '$key' \"$ROOT/templates/loop.local.md\" && grep -q '$key' \"$ROOT/commands/repete.md\" && grep -q '$key' \"$ROOT/commands/repete-status.md\""
+done
+
+
 echo "== INVARIANT: a mismatched done-claim NEVER tears the loop down =="
 scaffold ""
 setstate stale_limit 0    # even with the stale detector disabled

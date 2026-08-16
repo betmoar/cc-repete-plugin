@@ -94,7 +94,7 @@ If you add a check, decide its failure direction first and write it in a comment
 | `stale_count`/`stale_limit` keys | Hook `fm` reads + mismatch branch, `templates/loop.local.md`, `/repete` scaffold prose, `/repete-status` budgets line, `/repete-continue` paused-stale branch | tests: stale blocks |
 | `gauntlet`/`reference`/`bar` keys | Hook `fm` read + gauntlet injection block, `templates/loop.local.md`, `/repete` optional-features, `/repete-status` gauntlet section, tests scaffold comment | tests: gauntlet blocks |
 | `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the test coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md" |
-| Sentinel strings | Hook, protocol, all commands, README, both skills | tests grep re-inject for both |
+| Sentinel strings | Hook + README always; `<repete-done>` also protocol + running skill + /repete; `<repete-checkpoint>` also running skill + /repete-continue (NOT protocol.md — the frozen core stays quiet; the rule rides RULES_EXTRA) | tests: doc-lock block |
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
 | `tests/run-all.sh` checks | `.github/workflows/ci.yml` (and vice versa) | not enforced — keep in sync by hand |
@@ -195,4 +195,5 @@ If you add a check, decide its failure direction first and write it in a comment
 
 ## Operator
 
-@OPERATOR.md — it is this session's operating charter.
+@OPERATOR.md — it is this session's operating charter. Local and gitignored: in a fresh
+clone this import silently no-ops — run `/cc-operator:start` to materialize the charter.

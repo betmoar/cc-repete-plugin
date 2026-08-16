@@ -13,7 +13,8 @@ User note (optional): **$ARGUMENTS**
 
 ## status: paused-checkpoint — a loop boundary, approve the next payload
 
-The previous loop hit its exit goal and proposed a next payload in `.repete/transition.md`.
+The previous loop hit its exit goal and proposed a next payload in `.repete/transition.md`
+(that payload is what the agent emitted inside its `<repete-checkpoint>` block).
 
 1. Show the user `.repete/transition.md` and the current `.repete/todo-next.md`. The user
    may have already edited `transition.md`; respect those edits. Fold in any `$ARGUMENTS`.
