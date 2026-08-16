@@ -36,23 +36,31 @@ fmv() { # key
   # Failure direction: NO perl -> read raw via cat (pre-F7 behavior: a BOM'd
   # file renders nothing, same as before the fix) — never an empty read that
   # blanks every segment (toolkit review critical).
-  local reader
+  # No eval: plain branches (Copilot review — eval is unsafe if the project
+  # path ever carries shell metacharacters, and unnecessary for a fixed choice).
   if command -v perl >/dev/null 2>&1; then
-    reader="perl -pe 's/^\xEF\xBB\xBF// if \$. == 1'"
+    perl -pe 's/^\xEF\xBB\xBF// if $. == 1' -- "$LOOP" 2>/dev/null \
+    | awk -v k="$1" '
+      /^---[[:space:]]*$/ { f++; next }
+      f==1 && index($0, k":")==1 {
+        sub("^" k ":[[:space:]]*", ""); gsub(/\r/, "")
+        sub(/^"/, ""); sub(/"$/, "")
+        print; exit
+      }
+      f>=2 { exit }
+    '
   else
-    reader="cat"
+    cat -- "$LOOP" 2>/dev/null \
+    | awk -v k="$1" '
+      /^---[[:space:]]*$/ { f++; next }
+      f==1 && index($0, k":")==1 {
+        sub("^" k ":[[:space:]]*", ""); gsub(/\r/, "")
+        sub(/^"/, ""); sub(/"$/, "")
+        print; exit
+      }
+      f>=2 { exit }
+    '
   fi
-  # shellcheck disable=SC2086  # $reader is a fixed two-word command chosen above
-  eval "$reader \"\$LOOP\"" 2>/dev/null \
-  | awk -v k="$1" '
-    /^---[[:space:]]*$/ { f++; next }
-    f==1 && index($0, k":")==1 {
-      sub("^" k ":[[:space:]]*", ""); gsub(/\r/, "")
-      sub(/^"/, ""); sub(/"$/, "")
-      print; exit
-    }
-    f>=2 { exit }
-  '
 }
 # Decimal-normalize: leading-zero values are DECIMAL ("09" = 9), not octal —
 # bash [[ -gt ]] throws "value too great for base" on 08/09 and errors the cap
