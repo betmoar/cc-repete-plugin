@@ -30,8 +30,12 @@ only for what is genuinely missing:
   (default 2500 — counts raw transcript JSONL lines, a loose proxy for context size,
   not tokens; when the transcript passes this the hook first spends one turn writing a
   handoff snapshot to `.repete/handoff.md` (transient `summarizing` status), then pauses
-  for a `/clear` + `/repete-continue` rehydrate that reads the handoff first). Suggest
-  defaults; only confirm if the user cares.
+  for a `/clear` + `/repete-continue` rehydrate that reads the handoff first). Plus
+  `stale_limit` (default 3): after that many consecutive `<repete-done>` claims that do
+  NOT match the mission goal, the loop pauses (`paused-stale`) instead of silently
+  re-injecting — each mismatched claim gets an explanatory note in the re-inject telling
+  the agent to re-read `.repete/MISSION.md` and quote the goal exactly. A plain work
+  turn resets the count; `0` disables. Suggest defaults; only confirm if the user cares.
 
 If the mission is genuinely ambiguous, ask 2–4 sharp questions, then proceed. If it is
 already clear from `$ARGUMENTS`, restate your understanding in two lines and continue.
@@ -46,7 +50,8 @@ Create, in the project root:
   - `session_id`: the current session id (read it from the environment if available; else
     leave `""` — the hook will simply skip the isolation check).
   - `mission_goal`: the EXACT goal string, identical to `GOAL:` in MISSION.md.
-  - `max_iterations`, `context_budget_lines`: as agreed.
+  - `max_iterations`, `context_budget_lines`, `stale_limit`: as agreed
+    (`stale_count: 0` ships with the template — hook-maintained, never hand-edit).
   - `lesson_catalog_cap`: max lesson lines surfaced in the catalog each iteration
     (default 8; 0 = uncapped — only for small projects). Only relevant when
     `lessons_enabled: true`.

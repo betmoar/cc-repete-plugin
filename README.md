@@ -11,18 +11,19 @@ both off by default so a bare loop stays quiet. It reuses the
 [`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.1.4** — a single evolving loop with opt-in autonomous mode and opt-in project-local
-lessons. Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
-same state model.
+This is **v0.2.0** — a single evolving loop with opt-in autonomous mode, opt-in project-local
+lessons, and mismatch-feedback on done-claims. Multi-phase mission chaining (v2) and
+cross-project global learning (v3) build on the same state model.
 
 ## How it works
 
-A `Stop` hook is the loop engine. Every time the agent tries to stop, it makes a three-way
+A `Stop` hook is the loop engine. Every time the agent tries to stop, it makes a four-way
 decision:
 
 | Last output contains                                        | Hook does                                                                                           |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `<repete-done>GOAL</repete-done>` matching the mission goal | tears the loop down — **mission complete**                                                          |
+| `<repete-done>` NOT matching the mission goal               | counts it (`stale_count`), tells the agent why it was rejected in the re-inject, keeps looping      |
 | `<repete-checkpoint>…payload…</repete-checkpoint>`          | writes the proposed payload to `.repete/transition.md` and **yields to you** for approval           |
 | neither                                                     | **blocks the stop and re-injects** the current loop payload + standing rules (autonomous iteration) |
 
@@ -31,9 +32,14 @@ By default the loop is **gated**: it pauses at each per-loop exit goal for your 
 toward the mission and only stops on `<repete-done>` or `max_iterations` (a Stop hook still can't
 `/clear` itself, so the context-budget pause below still applies).
 
-Two safety yields also stop the autonomous run and hand control back:
+Three safety yields also stop the autonomous run and hand control back:
 
 - **`max_iterations`** reached → paused; `/repete-continue` to raise the cap.
+- **`stale_limit`** (default 3) consecutive `<repete-done>` claims that do NOT match the
+  mission goal → paused (`paused-stale`); each mismatched claim already gets an
+  explanatory note in the re-inject, so the agent knows to re-read `.repete/MISSION.md`
+  and quote the goal exactly. A plain work turn resets the count; `0` disables. This
+  catches the cheapest spinning signal — false claims of done — before iterations burn.
 - **`context_budget_lines`** exceeded → the engine first spends one turn writing a handoff
   snapshot of in-flight state to `.repete/handoff.md` (transient `summarizing` status), then
   pauses; `/clear` then `/repete-continue` rehydrates a fresh context from `.repete/` state —

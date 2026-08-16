@@ -20,7 +20,8 @@ Present a compact report:
   autonomous mode, note the loop runs past checkpoints to the mission (no `<repete-checkpoint>`
   pause).
 - **This loop's exit goal** (from the loop body).
-- **Budgets**: `max_iterations`, `context_budget_lines`.
+- **Budgets**: `max_iterations`, `context_budget_lines`, plus `stale_count`/`stale_limit`
+  (consecutive mismatched done-claims so far / the limit that yields `paused-stale`; 0 = off).
 - **TODO_NEXT** (only if `todo_next_enabled`): count + the top 3 lines.
 - **Lessons** (only if `lessons_enabled`): count + the highest-`severity` / highest-`hits` slugs.
 - **Lessons catalog (as the loop sees it)**: only when `lessons_enabled: true` — render the
@@ -41,4 +42,8 @@ Present a compact report:
   - `paused-checkpoint` → `/repete-continue` to approve the next payload.
   - `paused-context` → `/clear` then `/repete-continue`.
   - `paused-max` → `/repete-continue` to raise the cap, or `/repete-cancel`.
+  - `paused-stale` → the agent's recent `<repete-done>` claims did not match the mission
+    goal `stale_limit` times in a row. Read `.repete/MISSION.md`: either the goal string
+    is wrong (fix it in `loop.local.md` + `MISSION.md`) or the work truly isn't done.
+    Then `/repete-continue` (resets the count) or `/repete-cancel`.
   - `done` / `active:false` → finished; `/repete` to start a new run.

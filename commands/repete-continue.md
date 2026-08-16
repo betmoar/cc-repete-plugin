@@ -56,6 +56,21 @@ from externalized state ONLY — do not rely on conversation memory:
    session* below for why). Then resume working this loop's exit goal. The hook will pick the
    loop back up on your next Stop.
 
+## status: paused-stale — repeated done-claims did not match the mission goal
+
+The agent claimed `<repete-done>` `stale_limit` times in a row with a goal string that did
+not match `mission_goal`. The hook told it why each time (re-inject note); it kept missing.
+
+1. Read `.repete/MISSION.md` and the exact `mission_goal` in `.repete/loop.local.md`. Show
+   the user the mismatch: what the agent claimed vs. the stored goal.
+2. Decide with the user which it is:
+   - **Wrong goal string** (mission drifted, or the goal is misquoted): fix `mission_goal`
+     in `loop.local.md` AND `GOAL:` in `MISSION.md` to the same exact string.
+   - **Work not actually done**: the loop was spinning on a false claim. Re-read the working
+     brief with the user; tighten it or adjust the mission.
+3. Resume: set `stale_count` → 0, `status` → running, blank `session_id` per the note below,
+   and continue. Optionally raise `stale_limit` (0 disables the detector). Or `/repete-cancel`.
+
 ## status: paused-max — the iteration cap tripped
 
 Tell the user how many iterations ran and what's still incomplete. Ask whether to (a) raise

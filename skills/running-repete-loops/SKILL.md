@@ -47,7 +47,10 @@ tests green" is risky (the agent might write "tests are passing"); "`npm test` e
 better because it's mechanical. The brittle failure direction is *burns the full budget*, not
 *exits early* — the hook is deliberately strict so an accidental paraphrase never tears the
 loop down prematurely. That's the safe direction to err, but it still wastes iterations, so
-make the goal echo-able.
+make the goal echo-able. A paraphrased claim is no longer silent either: since v0.2.0 the
+hook counts it (`stale_count`), tells the agent in the re-inject exactly why the claim was
+rejected, and after `stale_limit` (default 3) consecutive mismatches yields `paused-stale`
+to the human instead of letting the loop grind to the cap.
 
 ## The four memory layers — what goes where
 
@@ -150,7 +153,7 @@ that's the rot the catalog exists to prevent.
 
 ## Reading checkpoints and the safety yields
 
-The loop hands control back to the human in four situations. Recognize which one you're in:
+The loop hands control back to the human in five situations. Recognize which one you're in:
 
 - **`paused-checkpoint`** — the loop hit *this loop's* exit goal and proposed a next payload in
   `.repete/transition.md`. Review/edit it, sanity-check it against MISSION.md for drift, then
@@ -172,6 +175,14 @@ The loop hands control back to the human in four situations. Recognize which one
 - **`paused-max`** — the iteration cap tripped. Either raise `max_iterations` and resume, or
   treat the current state as a checkpoint and `/repete-cancel`. If you keep hitting this, the
   mission goal is probably a vibe — go back and make it checkable.
+- **`paused-stale`** — the agent claimed `<repete-done>` `stale_limit` (default 3) times in a
+  row with a string that did not match `mission_goal`. Each mismatched claim already got an
+  explanatory note in the re-inject ("does NOT match — re-read MISSION.md, quote the goal
+  exactly"), so reaching the limit means the agent kept mis-claiming anyway. Two causes:
+  the goal string is wrong (fix `mission_goal` in `loop.local.md` AND `GOAL:` in
+  MISSION.md), or the work truly isn't done and the loop was spinning on a false claim.
+  `/repete-continue` (resets the count) after fixing, or `/repete-cancel`. A plain work
+  turn resets the counter, so stage-wise loops don't false-trip.
 - **mission done** — the agent emitted `<repete-done>GOAL</repete-done>` matching the goal; the
   hook set `active:false`. Finished.
 
@@ -183,6 +194,11 @@ safe one, so an accidental co-occurrence never tears the loop down.
 - **`max_iterations`** — the runaway backstop. `0` is uncapped; warn the user if they ask for
   it. For a supervised single-track mission, single digits to low tens is plenty between
   checkpoints.
+- **`stale_limit`** — consecutive mismatched done-claims before a `paused-stale` yield
+  (default 3, `0` disables). This is spin detection on the cheapest signal: a
+  `<repete-done>` claim that fails the goal-match. Below the limit each mismatch gets a
+  re-inject note telling the agent why it was rejected, so most loops self-correct on the
+  very next turn without human involvement.
 - **`context_budget_lines`** — raw transcript JSONL lines, a loose proxy for context size (not
   tokens). Default 2500. When the transcript passes it, the loop pauses for the `/clear`+
   rehydrate cycle above. This is a *coarse* proxy; if a loop reads large files it rots faster

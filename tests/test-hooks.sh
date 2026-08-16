@@ -18,6 +18,7 @@ scaffold(){
   {
     printf -- '---\nactive: true\nphase: 1\niteration: 1\nsession_id: ""\n'
     printf 'max_iterations: 0\ncontext_budget_lines: 0\nlesson_catalog_cap: 8\n'
+    printf 'stale_count: 0\nstale_limit: 3\n'
     printf 'mission_goal: "all tests pass"\nstatus: running\nstarted_at: ""\n'
     [ -n "$1" ] && printf '%s\n' "$1"
     printf -- '---\n## This loop'"'"'s exit goal\ndo the slice\n'
@@ -134,7 +135,7 @@ ck "session mismatch: hook exits silently"  '[ -z "$OUT" ]'
 ck "session mismatch: status unchanged"     'grep -qE "^status: running" "$TMP/.repete/loop.local.md"'
 
 echo "== Already-paused states: hook exits 0 immediately =="
-for pstate in paused-checkpoint paused-context paused-max; do
+for pstate in paused-checkpoint paused-context paused-max paused-stale; do
   scaffold ""
   setstate status "$pstate"
   mktx "did some work"
@@ -157,6 +158,73 @@ mktx "<repete-done>  all tests pass  </repete-done>"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "done normalized: active=false"  'grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
 ck "done normalized: status=done"   'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== Stale: mismatched done-claim is counted + fed back, not silent =="
+scaffold ""
+mktx "<repete-done>everything works great</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "mismatch: loop NOT torn down"     'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "mismatch: stale_count bumped to 1" 'grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
+ck "mismatch: re-inject explains the rejection" 'printf "%s" "$OUT" | jq -r .reason | grep -q "does NOT match"'
+ck "mismatch: decision=block (keep working)"    'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== Stale: 3rd consecutive mismatched claim yields paused-stale =="
+# two mismatches already counted above; third consecutive trips the default limit
+mktx "<repete-done>everything works great</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "2nd mismatch: still running" 'grep -qE "^status: running" "$TMP/.repete/loop.local.md"'
+mktx "<repete-done>everything works great</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "3rd mismatch: status=paused-stale" 'grep -qE "^status: paused-stale" "$TMP/.repete/loop.local.md"'
+ck "3rd mismatch: systemMessage names the mismatch" 'printf "%s" "$OUT" | jq -r .systemMessage | grep -q "mission goal"'
+ck "3rd mismatch: no block (yields to human)"      '! printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== Stale: a plain work turn resets the counter =="
+scaffold ""
+mktx "<repete-done>nope</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"   # precondition: counted
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "work turn resets stale_count to 0" 'grep -qE "^stale_count: 0" "$TMP/.repete/loop.local.md"'
+ck "work turn: no stale note in re-inject" '! printf "%s" "$OUT" | jq -r .reason | grep -q "does NOT match"'
+
+echo "== Stale: stale_limit 0 disables the counter entirely =="
+scaffold ""
+setstate stale_limit 0
+for i in 1 2 3 4 5; do
+  mktx "<repete-done>nope</repete-done>"
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+done
+ck "limit 0: still running after 5 mismatches" 'grep -qE "^status: running" "$TMP/.repete/loop.local.md"'
+ck "limit 0: counter never written"            '! grep -qE "^stale_count: [1-9]" "$TMP/.repete/loop.local.md"'
+
+echo "== Stale: missing stale_limit field defaults to on (fail toward human) =="
+scaffold ""
+grep -vE '^stale_limit:' "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+for i in 1 2 3; do
+  mktx "<repete-done>nope</repete-done>"
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+done
+ck "absent limit: 3rd mismatch yields paused-stale" 'grep -qE "^status: paused-stale" "$TMP/.repete/loop.local.md"'
+
+echo "== Stale: garbage stale_limit value defaults to 3 =="
+scaffold ""
+setstate stale_limit 'garbage'
+mktx "<repete-done>nope</repete-done>"
+mktx "<repete-done>nope</repete-done>"
+mktx "<repete-done>nope</repete-done>"
+for i in 1 2 3; do
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+done
+ck "garbage limit: behaves as 3 (paused-stale)" 'grep -qE "^status: paused-stale" "$TMP/.repete/loop.local.md"'
+
+echo "== Stale: matching done with a nonzero counter still tears down cleanly =="
+scaffold ""
+setstate stale_count 2
+mktx "<repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "true done beats a dirty counter" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
 
 echo "== Context budget two-step: pass 1 marks summarizing =="
 scaffold ""
@@ -324,6 +392,48 @@ ck "cap=2: low card not shown"                           '! printf "%s\n" "$CAT"
 ck "overflow note counts the hidden card"                'printf "%s\n" "$CAT" | grep -q "+1 more"'
 ck "slugless card skipped silently"                      '! printf "%s\n" "$CAT" | grep -q "no slug"'
 ck "_TEMPLATE.md never listed"                           '! printf "%s\n" "$CAT" | grep -q "short-kebab-slug"'
+
+echo "== I2-stale: checkpoint + mismatched done in one message -> checkpoint wins, no count =="
+scaffold ""
+mktx "<repete-checkpoint>next payload</repete-checkpoint> and <repete-done>nope</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "I2-stale: pauses at checkpoint"        'grep -qE "^status: paused-checkpoint" "$TMP/.repete/loop.local.md"'
+ck "I2-stale: mismatch NOT counted"        'grep -qE "^stale_count: 0" "$TMP/.repete/loop.local.md"'
+
+echo "== Stale counting is suppressed while summarizing (budget two-step owns the Stop) =="
+scaffold ""
+setstate context_budget_lines 3
+setstate status summarizing
+{
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"a"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"b"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"c"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"<repete-done>nope</repete-done>"}]}}'
+} > "$TMP/t.jsonl"
+printf '' > "$TMP/.repete/handoff.md"   # empty -> pass 2 takes the warns path
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "summarizing mismatch: NOT counted"    'grep -qE "^stale_count: 0" "$TMP/.repete/loop.local.md"'
+ck "summarizing mismatch: budget path wins" 'grep -qE "^status: paused-context" "$TMP/.repete/loop.local.md"'
+
+echo "== Autonomous: false done-claims still count (stale yield is a budget-class stop) =="
+scaffold 'autonomous: true'
+mktx "<repete-done>nope</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "autonomous mismatch counted" 'grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
+
+# --- invariant lock ---------------------------------------------------------
+echo "== INVARIANT: a mismatched done-claim NEVER tears the loop down =="
+scaffold ""
+setstate stale_limit 0    # even with the stale detector disabled
+mktx "<repete-done>all tests pass</repete-done>"   # this one MATCHES and must tear down
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "matching claim tears down (control)" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+scaffold ""
+setstate stale_limit 0
+mktx "<repete-done>ALL TESTS PASS</repete-done>"   # case-mismatched: must NEVER be done
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "case-mismatched claim: still active" '! grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
+ck "case-mismatched claim: not done"     '! grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
 
 echo "== Coupling lock: templates/handoff.md headings match the hook's scaffolding-strip list =="
 # The pass-2 "was the handoff actually filled?" test strips the template's own

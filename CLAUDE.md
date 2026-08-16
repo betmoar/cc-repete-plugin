@@ -35,12 +35,14 @@ Two kinds of code live here and they fail differently:
    check: state-file exists → jq exists (else fail open) → `active` → terminal/paused
    statuses exit → session isolation (stamp on first sight) → autonomous no-budget
    backstop → read last main-thread assistant message → sentinel handling (suppressed
-   while `summarizing`; checkpoint beats done; autonomous ignores checkpoint) → max-
+   while `summarizing`; checkpoint beats done; autonomous ignores checkpoint; a
+   mismatched done-claim counts toward `stale_count`, annotates the re-inject, and at
+   `stale_limit` consecutive mismatches yields `paused-stale`) → max-
    iterations yield (skipped while `summarizing`) → context-budget two-step → stranded-
    `summarizing` recovery (re-applies the cap) → bump iteration → assemble re-inject
-   (body → catalog → constitution → protocol last). Do not reorder without re-deriving
-   why each earlier check must precede the later ones — the inline comments state the
-   reason at each site.
+   (body → [stale note] → catalog → constitution → protocol last). Do not reorder without
+   re-deriving why each earlier check must precede the later ones — the inline comments
+   state the reason at each site.
 2. **`.repete/loop.local.md` frontmatter schema** — the shared contract between the
    hook, the statusline, all four commands, and the tests. Adding a key means updating:
    the template, `commands/repete.md` scaffold instructions, the hook's `fm` reads, and
@@ -53,8 +55,8 @@ Two kinds of code live here and they fail differently:
    single-quoting in the hook is deliberate). If the template is unreadable the hook
    falls back to an inline core — the loop must never lose its sentinels.
 5. **The status state machine** — `running → summarizing → paused-context`,
-   `running → paused-checkpoint | paused-max`, terminal `done | cancelled`. Adding a
-   status means updating: the hook's early-exit case, `/repete-status`'s "what to do
+   `running → paused-checkpoint | paused-max | paused-stale`, terminal `done | cancelled`.
+   Adding a status means updating: the hook's early-exit case, `/repete-status`'s "what to do
    next" map, and `/repete-continue`'s branch list.
 
 ## Failure philosophy (the one rule)
@@ -70,6 +72,12 @@ tearing the loop down on a false positive. Concrete embodiments:
   bug fixed in v0.1.4).
 - Done-goal match is deliberately strict (exact string, whitespace-normalized): the
   cheap failure is burning iterations, the expensive one is a false teardown.
+- **A mismatched done-claim is counted and fed back, not silent** (v0.2.0): `stale_count`
+  bumps, a rejection note rides the next re-inject, and `stale_limit` (default 3, `0` off,
+  unparseable → 3 — fail toward the human) consecutive mismatches yield `paused-stale`. A
+  plain work turn (no done sentinel) resets the count — deliberate, so stage-wise loops
+  don't false-trip. The yield is budget-class: it stops even autonomous loops, because a
+  loop that repeatedly false-claims done is exactly the failure it exists to catch.
 - A stray sentinel during `summarizing` is ignored: the budget two-step owns that Stop.
 
 If you add a check, decide its failure direction first and write it in a comment.
@@ -82,6 +90,7 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/protocol.md` placeholders | Hook substitution + `PROTO_FALLBACK` | test: "Protocol placeholders" |
 | `loop.local.md` frontmatter keys | Hook `fm` reads, `commands/repete.md` scaffold, `/repete-status`, test `scaffold()` | tests use the schema throughout |
 | Status values | Hook early-exit case, `/repete-continue` branches, `/repete-status` map | tests: paused/terminal blocks |
+| `stale_count`/`stale_limit` keys | Hook `fm` reads + mismatch branch, `templates/loop.local.md`, `/repete` scaffold prose, `/repete-status` budgets line, `/repete-continue` paused-stale branch | tests: stale blocks |
 | Sentinel strings | Hook, protocol, all commands, README, both skills | tests grep re-inject for both |
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
@@ -91,6 +100,11 @@ If you add a check, decide its failure direction first and write it in a comment
 
 - **`set -uo pipefail` without `-e` is deliberate.** Much of the hook treats non-zero
   as data (grep misses, perl sentinel probes). Adding `-e` will break it subtly.
+- **`STALE_NOTE` is initialized OUTSIDE the `summarizing` guard.** The summarizing path
+  skips the whole sentinel block but still flows through the re-inject assembly, which
+  reads `STALE_NOTE` — under `set -u` an init placed inside the guard crashes every
+  summarizing-path Stop. Same trap applies to any future variable set inside a guarded
+  block but consumed after it.
 - **`set_fm` updates only the first frontmatter block and appends missing keys before
   the closing `---`** (C1/C2/C3 in the comments). It uses `awk -v`, which treats
   backslashes in values as escapes — fine for everything written today (statuses,
@@ -143,3 +157,7 @@ If you add a check, decide its failure direction first and write it in a comment
    loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
 5. **v2/v3 roadmap** (README): phased missions; global lesson store with
    recurrence-gated promotion. The state model was designed to extend to both.
+
+## Operator
+
+@OPERATOR.md — it is this session's operating charter.

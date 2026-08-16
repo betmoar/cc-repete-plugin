@@ -2,13 +2,16 @@
 #
 # repete Stop-hook loop engine.
 #
-# Three-way decision on every Stop attempt while a loop is active:
+# Four-way decision on every Stop attempt while a loop is active:
 #   1. <repete-done>GOAL</repete-done>  matches mission_goal  -> tear down, exit clean
-#   2. <repete-checkpoint>...</repete-checkpoint> present      -> yield to user for approval
-#   3. otherwise                                                -> block + re-inject (autonomous)
+#   2. <repete-done> present but NOT matching mission_goal    -> count it (stale_count),
+#      feed the rejection back into the re-inject; stale_limit in a row -> paused-stale
+#   3. <repete-checkpoint>...</repete-checkpoint> present      -> yield to user for approval
+#   4. otherwise                                                -> block + re-inject (autonomous)
 #
 # Plus two safety yields that also stop autonomous looping:
 #   - max_iterations reached
+#   - stale_limit consecutive mismatched done-claims (paused-stale)
 #   - context_budget_lines exceeded  -> two-step yield: first re-inject one turn
 #     to write a .repete/handoff.md snapshot (transient 'summarizing' status),
 #     then prompt the user to /clear and /repete-continue. While 'summarizing',
@@ -123,7 +126,7 @@ ACTIVE="$(fm active)"
 # hand edit or a failed teardown write can leave active:true — never re-inject
 # a finished loop on that account.
 case "$(fm status)" in
-  paused-checkpoint|paused-context|paused-max|paused|done|cancelled) exit 0 ;;
+  paused-checkpoint|paused-context|paused-max|paused-stale|paused|done|cancelled) exit 0 ;;
 esac
 
 # ---- session isolation ---------------------------------------------------
@@ -142,6 +145,8 @@ ITERATION="$(fm iteration)"; [[ "$ITERATION" =~ ^[0-9]+$ ]] || ITERATION=1
 PHASE="$(fm phase)";         [[ "$PHASE" =~ ^[0-9]+$ ]]     || PHASE=1
 MAX_ITER="$(fm max_iterations)";        [[ "$MAX_ITER" =~ ^[0-9]+$ ]]   || MAX_ITER=0
 CTX_BUDGET="$(fm context_budget_lines)";[[ "$CTX_BUDGET" =~ ^[0-9]+$ ]] || CTX_BUDGET=0
+STALE_LIMIT="$(fm stale_limit)";        [[ "$STALE_LIMIT" =~ ^[0-9]+$ ]] || STALE_LIMIT=3
+STALE="$(fm stale_count)";              [[ "$STALE" =~ ^[0-9]+$ ]]       || STALE=0
 MISSION_GOAL="$(fm mission_goal)"
 LESSONS_ENABLED="$(fm lessons_enabled)";     [[ "$LESSONS_ENABLED" == "true" ]]   || LESSONS_ENABLED=false
 TODO_NEXT_ENABLED="$(fm todo_next_enabled)"; [[ "$TODO_NEXT_ENABLED" == "true" ]] || TODO_NEXT_ENABLED=false
@@ -200,16 +205,48 @@ printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'exit(/<repete-checkpoint>.*?<\/repe
 # any sentinel; if it does so by accident, the pass-2 budget yield below must
 # still win — otherwise a stray <repete-checkpoint>/<repete-done> would divert
 # the loop out of the /clear flow. Suppress sentinel handling in this state.
+# (STALE_NOTE is initialized OUTSIDE the guard: the summarizing path skips the
+# sentinel block entirely but still flows through the re-inject assembly below.)
+STALE_NOTE=""
 if [[ "$STATUS" != "summarizing" ]]; then
 
 # ---- (1) mission done? ----------------------------------------------------
+# A done-claim that does NOT match mission_goal used to fall through silently:
+# the agent got zero feedback and re-claimed with the same wrong string until a
+# budget rescued the loop. Now the mismatch is counted (stale_count) and fed
+# back into the re-inject; a run of consecutive mismatches (stale_limit, default
+# 3, 0=off) yields paused-stale to the human — a budget-class stop, so it is
+# allowed to stop even an autonomous loop. Failure direction: never tears the
+# loop down, never blocks past the yield — worst case is yielding to the human,
+# the safe direction. Suppressed while 'summarizing' with the other sentinels.
 if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]]; then
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
-  if [[ -n "$DONE" && "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
-    set_fm status "done"
-    set_fm active false
-    emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
-    exit 0
+  if [[ -n "$DONE" ]]; then
+    if [[ "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
+      set_fm status "done"
+      set_fm active false
+      emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
+      exit 0
+    # Mismatched done-claim: count it, tell the agent why it was rejected.
+    elif [[ "$STALE_LIMIT" -gt 0 ]]; then
+      STALE=$((STALE + 1))
+      set_fm stale_count "$STALE"
+      if [[ "$STALE" -ge "$STALE_LIMIT" ]]; then
+        set_fm status paused-stale
+        emit "🧭 repete: ${STALE} consecutive done-claims did not match the mission goal (limit ${STALE_LIMIT}, phase ${PHASE}). The loop may be spinning on a false claim of done. Review .repete/MISSION.md: fix the goal string, edit stale_limit, reset stale_count and /repete-continue — or /repete-cancel."
+        exit 0
+      fi
+      STALE_NOTE="--- repete: your <repete-done> claim does NOT match the stored mission goal (claim ${STALE}/${STALE_LIMIT}). Either the work is not actually done, or you are quoting the goal string wrong: re-read .repete/MISSION.md and copy the exact goal. Do not re-emit the same claim unchanged."
+    fi
+  else
+    # No done-sentinel this turn: the agent did work, not a false claim. Reset
+    # the run (write only if non-zero — no pointless write on every Stop).
+    # Deliberate: an agent interleaving real work with claims resets, which
+    # protects stage-wise approaches from false positives.
+    if [[ "$STALE" -gt 0 ]]; then
+      set_fm stale_count 0
+      STALE=0
+    fi
   fi
 fi
 
@@ -401,8 +438,9 @@ if [[ "$LESSONS_ENABLED" == "true" ]]; then
 fi
 PROTO+="$RULES_EXTRA"
 
-# --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
+# --- assemble re-inject: brief, [stale note], [catalog], [constitution], protocol LAST ---
 REINJECT="$PAYLOAD_BODY"
+[[ -n "$STALE_NOTE" ]] && REINJECT+=$'\n\n'"$STALE_NOTE"
 [[ -n "$CATALOG" ]] && REINJECT+=$'\n\n'"$CATALOG"
 [[ -n "$CONSTITUTION" ]] && REINJECT+=$'\n\n--- project invariants (.repete/constitution.md) ---\n'"$CONSTITUTION"
 REINJECT+=$'\n'"$PROTO"
