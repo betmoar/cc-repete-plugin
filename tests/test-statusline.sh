@@ -118,4 +118,26 @@ printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TM
 OUT="$(run)"
 ck "BOM file still renders rp[5/10]" '[ "$OUT" = "rp[5/10]" ]'
 
+echo "== No perl on PATH: normal state still renders (fail-open) =="
+MINBIN="$(mktemp -d)"
+while IFS= read -r t; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$MINBIN/$t"
+done < <(printf '%s\n' bash sh cat grep sed awk tr printf env ln)
+rm -f "$MINBIN/perl"
+mkstate true 5 10
+OUT="$(printf '{"workspace":{"project_dir":"%s"}}' "$TMP" \
+  | env PATH="$MINBIN" CLAUDE_PROJECT_DIR="$TMP" bash "$SEG" 2>/dev/null)"
+ck "no-perl: renders rp[5/10] via raw read" '[ "$OUT" = "rp[5/10]" ]'
+
+echo "== num10 overflow: huge max renders as uncapped, never wraps negative =="
+mkstate true 3 99999999999999999999999999
+OUT="$(run 2>/dev/null)"
+ck "overflow max -> rp[3] uncapped (default 0), not garbage" '[ "$OUT" = "rp[3]" ]'
+
+echo "== Quoted status value still renders its pause marker (F14 + quote parity) =="
+mkstate true 3 10
+perl -i -pe 's/^iteration: 3/iteration: "3"\nstatus: "paused-stale"/' "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "quoted status paused-stale renders marker" 'printf "%s" "$OUT" | grep -q "stale"'
+
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

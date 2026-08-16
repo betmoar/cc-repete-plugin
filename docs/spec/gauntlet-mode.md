@@ -20,7 +20,7 @@ behavior.
 
 | Gauntlet step | Mechanism |
 | --- | --- |
-| 1. Ambitious goal + concrete example of "great" | `reference:` (path or URL) + `bar:` (one line, what "good enough" means) in loop.local.md frontmatter; MISSION.md gains a Reference section |
+| 1. Ambitious goal + concrete example of "great" | `reference:` (path or URL) + `bar:` (one line, what "good enough" means) in loop.local.md frontmatter — the only homes for both; MISSION.md carries the mission goal as before (no Reference section shipped; the working rules point the agent at the frontmatter keys) |
 | 2. Split into smallest independently judgeable parts | lead agent maintains `.repete/parts.md`: one line per part — part, judgeable criterion, status (todo/doing/done) |
 | 3. Each important part → a builder | builder = one subagent per part (or batch), dispatched by the lead; main thread = lead + integrator only |
 | 4. Output → separate critic with fresh context | critic = subagent receiving a minimal packet: the reference, the artifact locations, the parts list — never the builders' reasoning or conversation |

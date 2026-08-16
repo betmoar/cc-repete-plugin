@@ -19,7 +19,10 @@ repo's fail-open rule and couplings table.
 
 ## The defect this fixes
 
-`hooks/stop-hook.sh:205-214`: when the agent emits `<repete-done>X</repete-done>` and
+`hooks/stop-hook.sh` done-check block (at time of writing `:205-214`; later commits
+on the same branch shifted anchors — see the current `(1) mission done?` block, the
+early-exit `case "$(fm status)"`, and the `HAS_CHECKPOINT -eq 0` guard for live
+positions): when the agent emits `<repete-done>X</repete-done>` and
 `norm(X) != norm(mission_goal)`, the sentinel is silently ignored. The agent gets zero
 feedback, often re-claims done with the same wrong string, and burns iterations until
 the cap. This is the cheapest spinning signal in the system — it already reaches the
@@ -35,7 +38,8 @@ hook; it is just discarded.
 - `stale_count` — int, hook-maintained, starts 0 (unparseable → 0).
 
 **Placement** — inside the existing `[[ "$STATUS" != "summarizing" ]]` sentinel guard,
-restructured within the done-check block at :206. No decision-order change; the new
+restructured within the done-check block (see the live `(1) mission done?` marker).
+No decision-order change; the new
 logic lives entirely inside the block whose precedence is already derived
 (checkpoint-beats-done I2, autonomous checkpoint suppression, summarizing
 suppression all apply unchanged):
@@ -76,7 +80,8 @@ it does not violate "only done/budgets stop an autonomous loop". An autonomous l
 that repeatedly false-claims done is exactly the failure this catches; yielding to
 the human at the threshold is the intended backstop.
 
-**Early-exit case (~:126):** add `paused-stale` to the terminal/paused status list so
+**Early-exit case** (the `case "$(fm status)"` block near the top): add `paused-stale`
+to the terminal/paused status list so
 a subsequent Stop in that state exits 0 without re-injecting.
 
 ## Status machine

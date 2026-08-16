@@ -40,17 +40,29 @@ HOOK_INPUT="$(cat)"
 # BOM strip: a UTF-8 BOM before the opening '---' defeats the frontmatter regex
 # and silently kills the loop (audit F7). BSD awk cannot match the hex bytes in
 # a regex, so strip with perl (already a sentinel-probe dependency) on the first
-# line only.
-FM="$(perl -pe 's/^\xEF\xBB\xBF// if $. == 1' "$STATE_FILE" 2>/dev/null \
-  | awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' | tr -d '\r')"
+# line only. Failure direction: NO perl on PATH -> read the file RAW (pre-F7
+# behavior: a BOM'd file degrades to inactive, same as before the fix) — never
+# an empty read that would deactivate every loop (toolkit review critical).
+# shellcheck disable=SC2012
+FM_RAW="$(cat "$STATE_FILE" 2>/dev/null)"
+FM=""
+if command -v perl >/dev/null 2>&1; then
+  FM="$(printf '%s' "$FM_RAW" | perl -pe 's/^\xEF\xBB\xBF// if $. == 1' 2>/dev/null)"
+fi
+[[ -n "$FM" ]] || FM="$FM_RAW"
+FM="$(printf '%s\n' "$FM" | awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' | tr -d '\r')"
 fm() { printf '%s\n' "$FM" | grep "^$1:" | head -1 | sed "s/^$1:[[:space:]]*//" | sed 's/^"\(.*\)"$/\1/'; }
 # Decimal-normalize a numeric fm value: a leading zero ("08"/"09") is DECIMAL, but bash
 # arithmetic reads it as octal ("value too great for base" — crash or silent check-skip;
 # audit F1). Guards pass ^[0-9]+$ so the shape is already digits; force base 10.
-# Failure direction: malformed -> echo 0 (the "off" default), never an arithmetic error.
+# Overflow guard: a digit string longer than 18 digits cannot fit int64 and silently
+# wraps NEGATIVE in $((10#...)) — which made "-gt 0" and "-eq 0" both false and
+# disabled cap AND backstop at once (toolkit review). Out-of-range -> the caller's
+# default (same "off" direction as malformed), never a wrapped negative.
+# Failure direction: malformed or oversized -> echo default, never an arithmetic error.
 num10() { # rawvalue default
   local v="$1"
-  [[ "$v" =~ ^[0-9]+$ ]] || v="$2"
+  [[ "$v" =~ ^[0-9]{1,18}$ ]] || v="$2"
   printf '%d' "$((10#$v))"
 }
 

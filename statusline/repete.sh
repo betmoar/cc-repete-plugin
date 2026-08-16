@@ -32,8 +32,18 @@ LOOP="$PROJ/.repete/loop.local.md"
 # quotes are stripped for PARITY with the hook's fm() — a template-style quoted
 # `active: "true"` must render, not blank the segment (audit F9).
 fmv() { # key
-  # BOM stripped with perl: BSD awk cannot match the hex bytes (audit F7).
-  perl -pe 's/^\xEF\xBB\xBF// if $. == 1' "$LOOP" 2>/dev/null \
+  # BOM stripped with perl (BSD awk cannot match the hex bytes, audit F7).
+  # Failure direction: NO perl -> read raw via cat (pre-F7 behavior: a BOM'd
+  # file renders nothing, same as before the fix) — never an empty read that
+  # blanks every segment (toolkit review critical).
+  local reader
+  if command -v perl >/dev/null 2>&1; then
+    reader="perl -pe 's/^\xEF\xBB\xBF// if \$. == 1'"
+  else
+    reader="cat"
+  fi
+  # shellcheck disable=SC2086  # $reader is a fixed two-word command chosen above
+  eval "$reader \"\$LOOP\"" 2>/dev/null \
   | awk -v k="$1" '
     /^---[[:space:]]*$/ { f++; next }
     f==1 && index($0, k":")==1 {
@@ -46,8 +56,10 @@ fmv() { # key
 }
 # Decimal-normalize: leading-zero values are DECIMAL ("09" = 9), not octal —
 # bash [[ -gt ]] throws "value too great for base" on 08/09 and errors the cap
-# test to false, rendering a capped loop as uncapped (audit F1).
-num10() { local v="$1"; [[ "$v" =~ ^[0-9]+$ ]] || v=0; printf '%d' "$((10#$v))"; }
+# test to false, rendering a capped loop as uncapped (audit F1). Overflow guard:
+# >18 digits wraps negative in $((10#..)) and disables the cap silently — such
+# values default to 0 (uncapped, same as malformed), never a wrapped negative.
+num10() { local v="$1"; [[ "$v" =~ ^[0-9]{1,18}$ ]] || v=0; printf '%d' "$((10#$v))"; }
 
 active=$(fmv active)
 [[ "$active" == "true" ]] || exit 0

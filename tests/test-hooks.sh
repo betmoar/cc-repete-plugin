@@ -520,6 +520,43 @@ OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "F3: transition.md carries the LAST payload" 'grep -q "the real next payload" "$TMP/.repete/transition.md"'
 ck "F3: draft payload not promoted" '! grep -q "^draft payload$" "$TMP/.repete/transition.md"'
 
+echo "== Toolkit: STALE_NOTE sits between body and catalog (mismatch + lessons on) =="
+scaffold 'lessons_enabled: true'
+mktx "<repete-done>nope</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+stalepos(){ printf '%s' "$OUT" | jq -r .reason | awk -v m="$1" 'index($0,m){print NR; exit}'; }
+SP_BODY="$(stalepos "do the slice")"; SP_NOTE="$(stalepos "does NOT match")"; SP_CAT="$(stalepos "Known lessons")"; SP_PROTO="$(stalepos "repete standing rules")"
+ck "stale note ordered: body < note < catalog < protocol" \
+   '[ -n "$SP_NOTE" ] && [ "$SP_BODY" -lt "$SP_NOTE" ] && [ "$SP_NOTE" -lt "$SP_CAT" ] && [ "$SP_CAT" -lt "$SP_PROTO" ]'
+
+echo "== Toolkit: octal CTX_BUDGET and CATALOG_CAP fire as decimal =="
+scaffold ""
+setstate context_budget_lines 03
+{
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"a"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"b"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"c"}]}}'
+  printf '%s\n' '{"message":{"role":"assistant","content":[{"type":"text","text":"d"}]}}'
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "octal ctx budget 03 trips at 3 lines -> summarizing" 'grep -qE "^status: summarizing" "$TMP/.repete/loop.local.md"'
+scaffold 'lessons_enabled: true'
+setstate lesson_catalog_cap 02
+rm -f "$TMP/.repete/lessons/001-foo-trap.md"
+printf -- '---\nslug: c1\ntags: [a]\nseverity: low\nhits: 1\n---\nb\n' > "$TMP/.repete/lessons/001.md"
+printf -- '---\nslug: c2\ntags: [b]\nseverity: high\nhits: 1\n---\nb\n' > "$TMP/.repete/lessons/002.md"
+printf -- '---\nslug: c3\ntags: [c]\nseverity: medium\nhits: 1\n---\nb\n' > "$TMP/.repete/lessons/003.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "octal catalog cap 02 caps at 2 (+1 more)" 'printf "%s" "$OUT" | jq -r .reason | grep -q "+1 more"'
+
+echo "== Toolkit: GAUNTLET_FALLBACK carries the critic rule too =="
+scaffold $'gauntlet: true\nreference: "r"\nbar: "b"'
+mktx "did some work"
+OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$TMP/noplugin" bash "$H")"
+ck "fallback: critic rule present" 'printf "%s" "$OUT" | jq -r .reason | grep -q "critic"'
+
 echo "== F5: GATED loop with both budgets 0 gets the no-escape backstop too =="
 scaffold ""    # gated (no autonomous), both budgets 0 from scaffold defaults
 mktx "did some work"
@@ -598,6 +635,33 @@ for key in stale_count stale_limit gauntlet reference bar max_iterations context
      "grep -q '$key' \"$ROOT/templates/loop.local.md\" && grep -q '$key' \"$ROOT/commands/repete.md\" && grep -q '$key' \"$ROOT/commands/repete-status.md\""
 done
 
+
+echo "== No perl on PATH: hook degrades to raw-read (fail-open, loop survives) =="
+# Minimal PATH without perl; the state read must fall back to raw (BOM unstripped
+# — pre-F7 behavior) instead of yielding empty input and silently deactivating.
+MINBIN="$(mktemp -d)"
+while IFS= read -r t; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$MINBIN/$t"
+done < <(printf '%s\n' bash sh cat grep sed awk tr printf head wc jq env ln)
+rm -f "$MINBIN/perl"
+scaffold ""
+mktx "did some work"
+OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$MINBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
+ck "no-perl: normal state file still loops (block)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== num10 overflow: huge digit-string defaults, never negative =="
+scaffold ""
+setstate max_iterations 99999999999999999999999999
+setstate iteration 1
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "overflow max_iterations -> 0/backstop, cap not silently disabled" 'grep -qE "^max_iterations: (0|25)" "$TMP/.repete/loop.local.md"'
+scaffold ""
+setstate iteration 99999999999999999999999999
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "overflow iteration -> sane behavior, decision JSON emitted" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
 
 echo "== INVARIANT: a mismatched done-claim NEVER tears the loop down =="
 scaffold ""
