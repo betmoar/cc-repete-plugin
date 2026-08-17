@@ -166,13 +166,20 @@ a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled
   same as before that hardening) and sentinel probes fall back to permissive reads.
 - The `remember` plugin is recommended (memory + `SessionStart` rehydrate) but not required.
 
-## Install (local testing)
+## Install
 
 ```bash
+# from the marketplace manifest in this repo:
+/plugin marketplace add betmoar/cc-repete-plugin
+# or local testing:
 claude --plugin-dir .
 ```
 
 Then `/repete <your mission>` in a project. `/repete-cancel` (or delete `.repete/`) to stop.
+
+Releases are tag-driven: push `v<x.y.z>` with `plugin.json` and the newest CHANGELOG entry
+matching, and the [release workflow](.github/workflows/release.yml) gates the trio, re-runs
+the full test suite, and publishes the CHANGELOG section as the release body.
 
 ## Roadmap
 

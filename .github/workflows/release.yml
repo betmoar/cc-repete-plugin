@@ -1,0 +1,46 @@
+# Cutting a release (see CHANGELOG.md): merge to main with .claude-plugin/
+# plugin.json bumped and the matching `## [x.y.z]` entry newest in
+# CHANGELOG.md, then push a tag `v<x.y.z>`. This workflow fails the tag build
+# on any mismatch, re-runs the full gate (shellcheck + manifests + both test
+# suites — same checks as ci.yml / tests/run-all.sh), and publishes a GitHub
+# release whose body is that version's CHANGELOG section.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: install jq + shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq shellcheck
+
+      - name: Gate — tag == plugin.json == newest CHANGELOG heading
+        run: node scripts/release-gate.mjs "$GITHUB_REF_NAME" --notes-out release-notes.md
+
+      - name: shellcheck
+        run: shellcheck hooks/*.sh statusline/*.sh tests/*.sh
+      - name: plugin manifests are valid JSON
+        run: jq -e . .claude-plugin/plugin.json .claude-plugin/statusline.json .claude-plugin/marketplace.json hooks/hooks.json > /dev/null
+      - name: hook engine tests
+        run: bash tests/test-hooks.sh
+      - name: statusline tests
+        run: bash tests/test-statusline.sh
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag
