@@ -47,7 +47,10 @@ tests green" is risky (the agent might write "tests are passing"); "`npm test` e
 better because it's mechanical. The brittle failure direction is *burns the full budget*, not
 *exits early* — the hook is deliberately strict so an accidental paraphrase never tears the
 loop down prematurely. That's the safe direction to err, but it still wastes iterations, so
-make the goal echo-able.
+make the goal echo-able. A paraphrased claim is no longer silent either: since v0.2.0 the
+hook counts it (`stale_count`), tells the agent in the re-inject exactly why the claim was
+rejected, and after `stale_limit` (default 3) consecutive mismatches yields `paused-stale`
+to the human instead of letting the loop grind to the cap.
 
 ## The four memory layers — what goes where
 
@@ -81,7 +84,7 @@ the rails; a sprawling contradictory one quietly erodes adherence.
 
 ## Optional features — off by default
 
-Three frontmatter flags in `loop.local.md` gate behavior that is **off by default**, because each
+Four frontmatter flags in `loop.local.md` gate behavior that is **off by default**, because each
 adds re-injected text or removes a safety gate. Turn them on deliberately, not reflexively:
 
 - **`lessons_enabled: false`** — when on, the hook injects the lessons catalog each iteration and
@@ -93,6 +96,8 @@ adds re-injected text or removes a safety gate. Turn them on deliberately, not r
   side-quests, so it stays focused on the exit goal. Turn it on when harvesting a backlog *is* the
   point.
 - **`autonomous: false`** — see below.
+- **`gauntlet: false`** — see *Gauntlet runs* below. Builder/critic rounds against a reference;
+  only meaningful when a concrete example of "great" exists.
 
 The default-off stance is the fix for the loop being too chatty: a bare loop re-injects only the
 brief + constitution + the frozen core protocol (re-read, constitution, the `<repete-done>`
@@ -114,6 +119,47 @@ Two consequences to design for:
    `designing-autonomous-loops` on the hook-spine constraint), so even an autonomous loop still
    pauses at `context_budget_lines` for a human `/clear` + `/repete-continue`. Autonomy removes the
    *checkpoint* gate, not the *context* gate — budget your run accordingly.
+
+## Gauntlet runs — builder/critic rounds against a reference
+
+`gauntlet: true` turns iterations into reference-driven improvement rounds. The hook injects the
+gauntlet working rules each iteration (from `templates/gauntlet.md`); the agent — not the hook —
+runs the pattern with its own subagents. The loop engine (budgets, sentinels, done-detection)
+is untouched: a critic never gates the done sentinel, and stray sentinels from builder/critic
+subagents are already ignored by the sidechain guard.
+
+Prerequisites, both required or keep it off (the hook enforces this — with either key empty
+the working rules are withheld and the loop runs plain):
+
+- **`reference:`** — a concrete example of "great" the agent can actually read (path, repo, URL).
+  No reference → nothing to A/B against → the rounds are theater.
+- **`bar:`** — one line stating what "reached the bar" means. This is the critic's stop
+  criterion, not the mission goal.
+
+The round discipline (one round ≈ one iteration ≈ one commit):
+
+1. The lead maintains `.repete/parts.md` — part · judgeable criterion · status. Finely split
+   enough that each part can be judged on its own.
+2. Each open part goes to ONE builder subagent (part + criterion + paths, nothing else). Never
+   two builders on one file. The main thread integrates — the lead is not a builder.
+3. Every round gets ONE critic subagent with a **fresh context**: it receives the reference,
+   `git show` of the current and previous round *unlabeled* (blind A/B — it must not know which
+   is newer), the parts list, and the bar. It never sees the lead's or builders' reasoning —
+   that's the whole point of separation.
+4. The critic picks a winner and names the single largest meaningful gap vs. the reference.
+   Verdict → `.repete/critique.md` (overwritten each round), first line `WINNER: <round>` or
+   `WINNER: none`. The hook injects that first line into the next re-inject so the lead opens
+   the round already knowing the verdict.
+5. The named gap is the next round's top priority. Rounds repeat until every part meets the
+   bar, a budget fires (`max_iterations` = rounds, `context_budget_lines`, `stale_limit`), or
+   you stop the run — the Gauntlet's own stopping rule, mapped onto existing budgets.
+6. When every part is at the bar: ONE final integration critic over the whole artifact. Only
+   after it agrees is the mission goal claimable. `<repete-done>` still requires the exact
+   goal-string match — the critic shapes the work, the sentinel stays the exit.
+
+Critic-packet hygiene is where these runs succeed or rot: the critic that gets the builder's
+justifications stops judging the artifact and starts grading homework. Same failure mode as a
+vague mission goal — guard the packet, not the prompt.
 
 ## Authoring lesson cards
 
@@ -150,7 +196,7 @@ that's the rot the catalog exists to prevent.
 
 ## Reading checkpoints and the safety yields
 
-The loop hands control back to the human in four situations. Recognize which one you're in:
+The loop hands control back to the human in five situations. Recognize which one you're in:
 
 - **`paused-checkpoint`** — the loop hit *this loop's* exit goal and proposed a next payload in
   `.repete/transition.md`. Review/edit it, sanity-check it against MISSION.md for drift, then
@@ -172,6 +218,14 @@ The loop hands control back to the human in four situations. Recognize which one
 - **`paused-max`** — the iteration cap tripped. Either raise `max_iterations` and resume, or
   treat the current state as a checkpoint and `/repete-cancel`. If you keep hitting this, the
   mission goal is probably a vibe — go back and make it checkable.
+- **`paused-stale`** — the agent claimed `<repete-done>` `stale_limit` (default 3) times in a
+  row with a string that did not match `mission_goal`. Each mismatched claim already got an
+  explanatory note in the re-inject ("does NOT match — re-read MISSION.md, quote the goal
+  exactly"), so reaching the limit means the agent kept mis-claiming anyway. Two causes:
+  the goal string is wrong (fix `mission_goal` in `loop.local.md` AND `GOAL:` in
+  MISSION.md), or the work truly isn't done and the loop was spinning on a false claim.
+  `/repete-continue` (resets the count) after fixing, or `/repete-cancel`. A plain work
+  turn resets the counter, so stage-wise loops don't false-trip.
 - **mission done** — the agent emitted `<repete-done>GOAL</repete-done>` matching the goal; the
   hook set `active:false`. Finished.
 
@@ -183,6 +237,11 @@ safe one, so an accidental co-occurrence never tears the loop down.
 - **`max_iterations`** — the runaway backstop. `0` is uncapped; warn the user if they ask for
   it. For a supervised single-track mission, single digits to low tens is plenty between
   checkpoints.
+- **`stale_limit`** — consecutive mismatched done-claims before a `paused-stale` yield
+  (default 3, `0` disables). This is spin detection on the cheapest signal: a
+  `<repete-done>` claim that fails the goal-match. Below the limit each mismatch gets a
+  re-inject note telling the agent why it was rejected, so most loops self-correct on the
+  very next turn without human involvement.
 - **`context_budget_lines`** — raw transcript JSONL lines, a loose proxy for context size (not
   tokens). Default 2500. When the transcript passes it, the loop pauses for the `/clear`+
   rehydrate cycle above. This is a *coarse* proxy; if a loop reads large files it rots faster

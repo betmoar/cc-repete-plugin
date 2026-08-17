@@ -13,20 +13,25 @@ User note (optional): **$ARGUMENTS**
 
 ## status: paused-checkpoint — a loop boundary, approve the next payload
 
-The previous loop hit its exit goal and proposed a next payload in `.repete/transition.md`.
+The previous loop hit its exit goal and proposed a next payload in `.repete/transition.md`
+(that payload is what the agent emitted inside its `<repete-checkpoint>` block).
 
 1. Show the user `.repete/transition.md` and the current `.repete/todo-next.md`. The user
    may have already edited `transition.md`; respect those edits. Fold in any `$ARGUMENTS`.
 2. Sanity-check against `.repete/MISSION.md`: is this next loop still serving the mission,
    or has it drifted? If it drifted, say so and propose a correction before proceeding.
-3. Do NOT copy lesson cards into the payload body. Lessons are surfaced automatically:
-   the hook builds a metadata catalog from `.repete/lessons/` every iteration and the
-   agent `Read`s the relevant cards on demand. The new payload's "Known traps" section
-   stays a pointer (see the template) — never a content sink.
+3. Do NOT copy lesson cards into the payload body. Lessons are surfaced automatically —
+   but ONLY when `lessons_enabled: true` in loop.local.md: the hook then builds a metadata
+   catalog from `.repete/lessons/` every iteration and the agent `Read`s the relevant
+   cards on demand. With lessons off (the default) no catalog exists; do not promise one
+   in the new payload. Either way, the "Known traps" section stays a pointer (see the
+   template) — never a content sink.
 4. Promote: write the approved payload into the BODY of `.repete/loop.local.md` (replace the
-   old body, keep/!update frontmatter). Then update frontmatter atomically:
+   old body, keep/update frontmatter). Then update frontmatter atomically:
    - `phase` → +1
    - `iteration` → 1
+   - `stale_count` → 0 (the new phase starts with a clean mismatch budget — a half-accrued
+     stale run from the previous phase must not lower this phase's limit)
    - `status` → running
    - `active` → true
    - `session_id` → `""` (see the note under *Resuming from a new session* below — if you are
@@ -55,6 +60,28 @@ from externalized state ONLY — do not rely on conversation memory:
    `session_id` → `""` (mandatory here — you have just `/clear`-ed; see *Resuming from a new
    session* below for why). Then resume working this loop's exit goal. The hook will pick the
    loop back up on your next Stop.
+4. **Check the iteration cap before resuming** (the budget pause deferred it): if
+   `iteration` is already `>= max_iterations`, the very next Stop yields `paused-max` with
+   zero work turns — a dead resume. If so, raise `max_iterations` (ask the user how much
+   headroom this stretch needs) before continuing.
+
+## status: paused-stale — repeated done-claims did not match the mission goal
+
+The agent claimed `<repete-done>` `stale_limit` times in a row with a goal string that did
+not match `mission_goal`. The hook told it why each time (re-inject note); it kept missing.
+
+1. Read `.repete/MISSION.md` and the exact `mission_goal` in `.repete/loop.local.md`. Show
+   the user the mismatch: what the agent claimed vs. the stored goal.
+2. Decide with the user which it is:
+   - **Wrong goal string** (mission drifted, or the goal is misquoted): fix `mission_goal`
+     in `loop.local.md` AND `GOAL:` in `MISSION.md` to the same exact string.
+   - **Work not actually done**: the loop was spinning on a false claim. Re-read the working
+     brief with the user; tighten it or adjust the mission.
+3. Resume: set `stale_count` → 0, `status` → running, blank `session_id` per the note below,
+   and continue. Also check the iteration cap the same way as `paused-context` above: if
+   `iteration` is already `>= max_iterations`, raise the cap first or this resume is dead
+   (next Stop yields `paused-max` with zero work turns). Optionally raise `stale_limit`
+   (0 disables the detector). Or `/repete-cancel`.
 
 ## status: paused-max — the iteration cap tripped
 

@@ -27,26 +27,67 @@ LOOP="$PROJ/.repete/loop.local.md"
 # Read a key from the FIRST frontmatter block only, exactly like the hook's
 # fm() — a whole-file scan also matched body prose that happens to start with
 # "active:"/"iteration:", capturing multi-line garbage and blanking the segment.
-# \r is stripped so a CRLF-edited state file still renders.
+# \r is stripped so a CRLF-edited state file still renders; a leading UTF-8 BOM
+# is stripped too (same Windows-artifact family, audit F7); surrounding double
+# quotes are stripped for PARITY with the hook's fm() — a template-style quoted
+# `active: "true"` must render, not blank the segment (audit F9).
 fmv() { # key
-  awk -v k="$1" '
-    /^---[[:space:]]*$/ { f++; next }
-    f==1 && index($0, k":")==1 {
-      sub("^" k ":[[:space:]]*", ""); gsub(/\r/, ""); print; exit
-    }
-    f>=2 { exit }
-  ' "$LOOP"
+  # BOM stripped with perl (BSD awk cannot match the hex bytes, audit F7).
+  # Failure direction: NO perl -> read raw via cat (pre-F7 behavior: a BOM'd
+  # file renders nothing, same as before the fix) — never an empty read that
+  # blanks every segment (toolkit review critical).
+  # No eval: plain branches (Copilot review — eval is unsafe if the project
+  # path ever carries shell metacharacters, and unnecessary for a fixed choice).
+  if command -v perl >/dev/null 2>&1; then
+    perl -pe 's/^\xEF\xBB\xBF// if $. == 1' -- "$LOOP" 2>/dev/null \
+    | awk -v k="$1" '
+      /^---[[:space:]]*$/ { f++; next }
+      f==1 && index($0, k":")==1 {
+        sub("^" k ":[[:space:]]*", ""); gsub(/\r/, "")
+        sub(/^"/, ""); sub(/"$/, "")
+        print; exit
+      }
+      f>=2 { exit }
+    '
+  else
+    cat -- "$LOOP" 2>/dev/null \
+    | awk -v k="$1" '
+      /^---[[:space:]]*$/ { f++; next }
+      f==1 && index($0, k":")==1 {
+        sub("^" k ":[[:space:]]*", ""); gsub(/\r/, "")
+        sub(/^"/, ""); sub(/"$/, "")
+        print; exit
+      }
+      f>=2 { exit }
+    '
+  fi
 }
+# Decimal-normalize: leading-zero values are DECIMAL ("09" = 9), not octal —
+# bash [[ -gt ]] throws "value too great for base" on 08/09 and errors the cap
+# test to false, rendering a capped loop as uncapped (audit F1). Overflow guard:
+# >18 digits wraps negative in $((10#..)) and disables the cap silently — such
+# values default to 0 (uncapped, same as malformed), never a wrapped negative.
+num10() { local v="$1"; [[ "$v" =~ ^[0-9]{1,18}$ ]] || v=0; printf '%d' "$((10#$v))"; }
 
 active=$(fmv active)
 [[ "$active" == "true" ]] || exit 0
 
-iter=$(fmv iteration)
-max=$(fmv max_iterations)
-[[ "$iter" =~ ^[0-9]+$ ]] || iter=0
+iter=$(num10 "$(fmv iteration)")
+max=$(num10 "$(fmv max_iterations)")
+status=$(fmv status)
 
-if [[ "$max" =~ ^[0-9]+$ ]] && [[ "$max" -gt 0 ]]; then
-  printf 'rp[%s/%s]' "$iter" "$max"
-else
-  printf 'rp[%s]' "$iter"
-fi
+# Status differentiation (audit F14): a paused/stale loop must not render
+# identically to a healthy running one — the user glancing at the bar needs to
+# see the loop is waiting on THEM. Transient 'summarizing' and 'running' render
+# plain; every paused-* state gets a ·wait marker with a short tag.
+seg="rp[${iter}"
+[[ "$max" -gt 0 ]] && seg+="/${max}"
+seg+="]"
+case "$status" in
+  paused-checkpoint) seg+=" ·ck" ;;
+  paused-context)    seg+=" ·ctx" ;;
+  paused-max)        seg+=" ·max" ;;
+  paused-stale)      seg+=" ·stale" ;;
+  *) ;;
+esac
+printf '%s' "$seg"

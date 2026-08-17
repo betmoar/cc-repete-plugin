@@ -1,11 +1,17 @@
 {
   "name": "cc-repete",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Self-evolving autonomous loops for Claude Code. Ralph-style iteration with an evolving payload, human-gated transitions (or opt-in autonomous mode), context-rot checkpoints, and opt-in TODO_NEXT harvesting + a project lesson library. Reuses the remember plugin for memory.",
   "author": {
     "name": "redux"
   },
   "repository": "https://github.com/betmoar/cc-repete-plugin",
   "license": "MIT",
-  "keywords": ["repete", "autonomous", "loop", "claude-code", "iteration-loop"]
+  "keywords": [
+    "repete",
+    "autonomous",
+    "loop",
+    "claude-code",
+    "iteration-loop"
+  ]
 }

@@ -1,0 +1,16 @@
+{
+  "name": "cc-repete-plugin",
+  "owner": {
+    "name": "betmoar"
+  },
+  "metadata": {
+    "description": "Marketplace for the cc-repete plugin. The plugin lives at the repo root; this file exists so `/plugin marketplace add` works on a local checkout or the GitHub repo, as a fallback to installing from a central marketplace."
+  },
+  "plugins": [
+    {
+      "name": "cc-repete",
+      "source": "./",
+      "description": "Self-evolving autonomous loops for Claude Code — a Stop-hook loop engine with human-gated checkpoints, context-rot recovery, stale done-claim detection, and opt-in gauntlet (builder/critic) rounds."
+    }
+  ]
+}

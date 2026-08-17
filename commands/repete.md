@@ -30,8 +30,12 @@ only for what is genuinely missing:
   (default 2500 — counts raw transcript JSONL lines, a loose proxy for context size,
   not tokens; when the transcript passes this the hook first spends one turn writing a
   handoff snapshot to `.repete/handoff.md` (transient `summarizing` status), then pauses
-  for a `/clear` + `/repete-continue` rehydrate that reads the handoff first). Suggest
-  defaults; only confirm if the user cares.
+  for a `/clear` + `/repete-continue` rehydrate that reads the handoff first). Plus
+  `stale_limit` (default 3): after that many consecutive `<repete-done>` claims that do
+  NOT match the mission goal, the loop pauses (`paused-stale`) instead of silently
+  re-injecting — each mismatched claim gets an explanatory note in the re-inject telling
+  the agent to re-read `.repete/MISSION.md` and quote the goal exactly. A plain work
+  turn resets the count; `0` disables. Suggest defaults; only confirm if the user cares.
 
 If the mission is genuinely ambiguous, ask 2–4 sharp questions, then proceed. If it is
 already clear from `$ARGUMENTS`, restate your understanding in two lines and continue.
@@ -46,12 +50,15 @@ Create, in the project root:
   - `session_id`: the current session id (read it from the environment if available; else
     leave `""` — the hook will simply skip the isolation check).
   - `mission_goal`: the EXACT goal string, identical to `GOAL:` in MISSION.md.
-  - `max_iterations`, `context_budget_lines`: as agreed.
+  - `max_iterations`, `context_budget_lines`, `stale_limit`: as agreed
+    (`stale_count: 0` ships with the template — hook-maintained, never hand-edit).
   - `lesson_catalog_cap`: max lesson lines surfaced in the catalog each iteration
     (default 8; 0 = uncapped — only for small projects). Only relevant when
     `lessons_enabled: true`.
-  - `lessons_enabled`, `todo_next_enabled`, `autonomous`: all default `false`. See
-    *Optional features* below before changing them.
+  - `lessons_enabled`, `todo_next_enabled`, `autonomous`, `gauntlet`: all default
+    `false`. See *Optional features* below before changing them. When gauntlet is on,
+    also fill `reference` (path or URL to the concrete example of "great") and `bar`
+    (one line: what the critic treats as "reached the bar").
   - `started_at`: output of `date -u +%Y-%m-%dT%H:%M:%SZ`.
   - `status: running`, `active: true`, `phase: 1`, `iteration: 1`.
   Fill the body with this loop's exit goal + working brief.
@@ -73,12 +80,16 @@ the project is a git repo and has none). Loop state is session-scratch and must 
 in commits. Exception: only if the user explicitly says they want to version the lesson
 library, add a `!.repete/lessons/` negation below it — never do that unprompted.
 
-If `.repete/loop.local.md` already exists and is `active: true`, STOP and tell the user a
-loop is already running (offer `/repete-status` or `/repete-cancel`).
+If `.repete/` already exists (a `loop.local.md` in ANY state — running, paused, `done`, or
+`cancelled`), STOP before scaffolding anything and tell the user: an active loop is running
+(offer `/repete-status` or `/repete-cancel`); a done/cancelled one holds the previous
+mission's state, phase/iteration history, and the user-authored `constitution.md` — ask
+whether to archive it (e.g. move `.repete/` aside) before overwriting. Never silently
+replace prior loop state; `/repete-cancel` promises state is preserved for review.
 
 ### Optional features (default OFF — keep the loop quiet)
 
-Three frontmatter flags gate behavior that is off by default. Don't enable them unless
+Four frontmatter flags gate behavior that is off by default. Don't enable them unless
 the user wants what they add:
 
 - **`lessons_enabled`** / **`todo_next_enabled`** — each adds a per-iteration journaling
@@ -93,12 +104,28 @@ the user wants what they add:
   **Pair it with a non-zero `max_iterations`** — `autonomous` + `max_iterations: 0` (the
   template default) has no checkpoint backstop, so the only stops are `<repete-done>` and the
   context-budget pause; set a cap so a stuck loop can't grind indefinitely. As a last resort
-  the Stop hook self-heals this trap: if `autonomous: true` runs with **both** `max_iterations`
-  and `context_budget_lines` at 0, it stamps a safety `max_iterations: 25` into state and warns
-  once — so a stuck mission can never block Stop forever. Set your own cap to override it.
+  the Stop hook self-heals this trap: ANY active loop (autonomous or gated) running with
+  **both** `max_iterations` and `context_budget_lines` at 0 gets a safety `max_iterations: 25`
+  stamped into state with a one-time warning — so a stuck loop (even a gated one whose agent
+  never checkpoints) can never block Stop forever. Set your own cap to override it.
   Note the other limit: a Stop hook cannot `/clear` itself, so an autonomous loop still pauses
   at the `context_budget_lines` boundary for a human `/clear` — autonomy removes the
   *checkpoint* gate, not the *context* gate.
+- **`gauntlet`** — builder/critic rounds against a reference. When `true` AND both
+  `reference:` and `bar:` are filled (the hook enforces this: with either empty the rules
+  are withheld — a gauntlet with nothing to reference is iteration-burning theater), the
+  hook injects
+  gauntlet working rules each iteration (from `templates/gauntlet.md`): the agent maintains
+  `.repete/parts.md` (part · judgeable criterion · status), dispatches one builder subagent
+  per part, and every round dispatches ONE fresh-context critic that blind-compares this
+  round vs. the previous (via `git show`, unlabeled) against the reference and names the
+  largest gap; the verdict lands in `.repete/critique.md` and its first line (the WINNER)
+  rides the next re-inject. Offer it when the mission has an ambitious quality bar AND a
+  concrete example of "great" exists (`reference:` — a path, repo, or URL the agent can
+  read) — without a reference there is nothing to A/B against, so keep it off. Requires
+  `bar:` too (one line). When enabled, also create `.repete/parts.md` (header line only)
+  and `.repete/critique.md` (empty) as seeds. Composes with `autonomous` — rounds then run
+  unattended between budgets.
 
 ## 3. Confirm, then begin
 

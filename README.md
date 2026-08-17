@@ -11,29 +11,38 @@ both off by default so a bare loop stays quiet. It reuses the
 [`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.1.4** — a single evolving loop with opt-in autonomous mode and opt-in project-local
-lessons. Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
+This is **v0.2.0** — a single evolving loop with opt-in autonomous mode, opt-in project-local
+lessons, mismatch-feedback on done-claims, and opt-in gauntlet (builder/critic) rounds.
+Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
 same state model.
 
 ## How it works
 
-A `Stop` hook is the loop engine. Every time the agent tries to stop, it makes a three-way
+A `Stop` hook is the loop engine. Every time the agent tries to stop, it makes a four-way
 decision:
 
 | Last output contains                                        | Hook does                                                                                           |
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `<repete-done>GOAL</repete-done>` matching the mission goal | tears the loop down — **mission complete**                                                          |
+| `<repete-done>` NOT matching the mission goal               | counts it (`stale_count`), tells the agent why it was rejected in the re-inject, keeps looping      |
 | `<repete-checkpoint>…payload…</repete-checkpoint>`          | writes the proposed payload to `.repete/transition.md` and **yields to you** for approval           |
 | neither                                                     | **blocks the stop and re-injects** the current loop payload + standing rules (autonomous iteration) |
 
 By default the loop is **gated**: it pauses at each per-loop exit goal for your approval. Set
 `autonomous: true` in `loop.local.md` to drop that gate — the loop then runs past sub-goals
 toward the mission and only stops on `<repete-done>` or `max_iterations` (a Stop hook still can't
-`/clear` itself, so the context-budget pause below still applies).
+`/clear` itself, so the context-budget pause below still applies). Either way, a loop with
+**both** budgets at 0 gets a safety `max_iterations: 25` stamped with a one-time warning — no
+configuration can trap Stop forever.
 
-Two safety yields also stop the autonomous run and hand control back:
+Three safety yields also stop the autonomous run and hand control back:
 
 - **`max_iterations`** reached → paused; `/repete-continue` to raise the cap.
+- **`stale_limit`** (default 3) consecutive `<repete-done>` claims that do NOT match the
+  mission goal → paused (`paused-stale`); each mismatched claim already gets an
+  explanatory note in the re-inject, so the agent knows to re-read `.repete/MISSION.md`
+  and quote the goal exactly. A plain work turn resets the count; `0` disables. This
+  catches the cheapest spinning signal — false claims of done — before iterations burn.
 - **`context_budget_lines`** exceeded → the engine first spends one turn writing a handoff
   snapshot of in-flight state to `.repete/handoff.md` (transient `summarizing` status), then
   pauses; `/clear` then `/repete-continue` rehydrates a fresh context from `.repete/` state —
@@ -45,6 +54,26 @@ Two safety yields also stop the autonomous run and hand control back:
 
 So: iterations run unattended; **you are only in the loop at transitions** — exactly where
 drift and bad decisions compound.
+
+## Gauntlet mode (opt-in): builder/critic rounds against a reference
+
+`gauntlet: true` (with `reference:` — a concrete example of "great" — and `bar:` — one line
+naming what "reached the bar" means; the hook withholds the rules if either is empty) turns
+iterations into reference-driven improvement
+rounds. The hook injects the working rules; the **agent** runs the pattern with subagents:
+
+1. Split the artifact into the smallest independently judgeable parts (`.repete/parts.md`).
+2. One builder subagent per part — part, criterion, file paths, nothing else.
+3. Every round: ONE fresh-context critic that blind-compares this round vs. the previous
+   (`git show`, unlabeled) against the reference and names the single largest gap.
+   Verdict → `.repete/critique.md`; its first line rides the next re-inject.
+4. The gap is the next round's top priority; when every part meets the bar, one final
+   integration critic over the whole artifact precedes any `<repete-done>` claim.
+
+The loop engine is untouched — no new exit paths, fail-open preserved; a critic never gates
+the done sentinel, and subagent sentinels were already ignored. Rounds stop on the existing
+budgets (`max_iterations` = rounds, `context_budget_lines`, `stale_limit`) or when you stop
+the run.
 
 ## Commands
 
@@ -74,10 +103,12 @@ operational and design judgment, so the commands stay terse:
 ```
 .repete/
 ├── MISSION.md        # north star + the verifiable mission goal (the <repete-done> string)
-├── loop.local.md     # frontmatter (phase/iteration/status/budgets) + current loop payload
+├── loop.local.md     # frontmatter (phase/iteration/status/budgets/flags) + current loop payload
 ├── todo-next.md      # out-of-scope discoveries — seeds the next loop (only if todo_next_enabled)
 ├── transition.md     # the agent's proposed next payload, awaiting your approval
 ├── handoff.md        # in-flight snapshot written at a context checkpoint, read on rehydrate
+├── parts.md          # gauntlet only: part · judgeable criterion · status
+├── critique.md       # gauntlet only: last critic verdict (first line = WINNER)
 └── lessons/          # one card per mistake/insight; retrieved into future loops (only if lessons_enabled)
 ```
 
@@ -111,7 +142,11 @@ constitution, and the frozen protocol, keeping each iteration quiet:
    (don't-touch dirs, "keep the public API stable", conventions). Injected with HTML
    comments stripped, only if it has real content — an unfilled comments-only starter
    is skipped, so it isn't pure bloat.
-4. **Engine protocol** — `templates/protocol.md`, the loop's standing rules (work from
+4. **Gauntlet working rules** *(only when `gauntlet: true`)* — `templates/gauntlet.md`:
+   the builder/critic round discipline, plus a one-line pointer to the last critic
+   verdict in `.repete/critique.md`. Falls back to an inline core if the template is
+   unreadable (fail-functional, like the protocol).
+5. **Engine protocol** — `templates/protocol.md`, the loop's standing rules (work from
    files, emit sentinels only when honest). Hook-owned, always injected **last** so the
    binding rules aren't buried under the payload. Falls back to an inline core if the
    template is unreadable (fail-functional — never lose the two sentinels).
@@ -124,18 +159,27 @@ a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled
 
 ## Requirements
 
-- `jq` and `perl` on `PATH` (`perl` ships with macOS; `jq` ships with recent macOS and
-  most Linux distros — install it if missing). Without `jq` the hook fails open — it
-  will not trap you in a loop it can't steer.
+- `jq` and `perl` on `PATH` are recommended but **fail-open optional** (`perl` ships with
+  macOS; `jq` ships with recent macOS and most Linux distros). Without `jq` the hook
+  fails open — it will not trap you in a loop it can't steer. Without `perl` the loop
+  still runs; only the UTF-8-BOM strip degrades (a BOM'd state file reads as inactive,
+  same as before that hardening) and sentinel probes fall back to permissive reads.
 - The `remember` plugin is recommended (memory + `SessionStart` rehydrate) but not required.
 
-## Install (local testing)
+## Install
 
 ```bash
+# from the marketplace manifest in this repo:
+/plugin marketplace add betmoar/cc-repete-plugin
+# or local testing:
 claude --plugin-dir .
 ```
 
 Then `/repete <your mission>` in a project. `/repete-cancel` (or delete `.repete/`) to stop.
+
+Releases are tag-driven: push `v<x.y.z>` with `plugin.json` and the newest CHANGELOG entry
+matching, and the [release workflow](.github/workflows/release.yml) gates the trio, re-runs
+the full test suite, and publishes the CHANGELOG section as the release body.
 
 ## Roadmap
 

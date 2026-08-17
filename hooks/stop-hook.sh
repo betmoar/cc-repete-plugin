@@ -2,13 +2,16 @@
 #
 # repete Stop-hook loop engine.
 #
-# Three-way decision on every Stop attempt while a loop is active:
+# Four-way decision on every Stop attempt while a loop is active:
 #   1. <repete-done>GOAL</repete-done>  matches mission_goal  -> tear down, exit clean
-#   2. <repete-checkpoint>...</repete-checkpoint> present      -> yield to user for approval
-#   3. otherwise                                                -> block + re-inject (autonomous)
+#   2. <repete-done> present but NOT matching mission_goal    -> count it (stale_count),
+#      feed the rejection back into the re-inject; stale_limit in a row -> paused-stale
+#   3. <repete-checkpoint>...</repete-checkpoint> present      -> yield to user for approval
+#   4. otherwise                                                -> block + re-inject (autonomous)
 #
-# Plus two safety yields that also stop autonomous looping:
+# Plus three safety yields that also stop autonomous looping:
 #   - max_iterations reached
+#   - stale_limit consecutive mismatched done-claims (paused-stale)
 #   - context_budget_lines exceeded  -> two-step yield: first re-inject one turn
 #     to write a .repete/handoff.md snapshot (transient 'summarizing' status),
 #     then prompt the user to /clear and /repete-continue. While 'summarizing',
@@ -34,8 +37,36 @@ HOOK_INPUT="$(cat)"
 # ---- frontmatter helpers -------------------------------------------------
 # tr -d '\r': a CRLF-edited state file (Windows editor) otherwise yields values
 # like "true<CR>" that fail every == test, silently deactivating the loop.
-FM="$(awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' "$STATE_FILE" | tr -d '\r')"
+# BOM strip: a UTF-8 BOM before the opening '---' defeats the frontmatter regex
+# and silently kills the loop (audit F7). BSD awk cannot match the hex bytes in
+# a regex, so strip with perl (already a sentinel-probe dependency) on the first
+# line only. Failure direction: NO perl on PATH -> read the file RAW (pre-F7
+# behavior: a BOM'd file degrades to inactive, same as before the fix) — never
+# an empty read that would deactivate every loop (toolkit review critical).
+# NOTE: the $(cat) roundtrip strips embedded NUL bytes (command substitution
+# limitation) — a NUL-corrupted state file reads as inactive, the same
+# fail-open direction as the BOM/CRLF cases; pathological, accepted.
+FM_RAW="$(cat "$STATE_FILE" 2>/dev/null)"
+FM=""
+if command -v perl >/dev/null 2>&1; then
+  FM="$(printf '%s' "$FM_RAW" | perl -pe 's/^\xEF\xBB\xBF// if $. == 1' 2>/dev/null)"
+fi
+[[ -n "$FM" ]] || FM="$FM_RAW"
+FM="$(printf '%s\n' "$FM" | awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' | tr -d '\r')"
 fm() { printf '%s\n' "$FM" | grep "^$1:" | head -1 | sed "s/^$1:[[:space:]]*//" | sed 's/^"\(.*\)"$/\1/'; }
+# Decimal-normalize a numeric fm value: a leading zero ("08"/"09") is DECIMAL, but bash
+# arithmetic reads it as octal ("value too great for base" — crash or silent check-skip;
+# audit F1). Guards pass ^[0-9]+$ so the shape is already digits; force base 10.
+# Overflow guard: a digit string longer than 18 digits cannot fit int64 and silently
+# wraps NEGATIVE in $((10#...)) — which made "-gt 0" and "-eq 0" both false and
+# disabled cap AND backstop at once (toolkit review). Out-of-range -> the caller's
+# default (same "off" direction as malformed), never a wrapped negative.
+# Failure direction: malformed or oversized -> echo default, never an arithmetic error.
+num10() { # rawvalue default
+  local v="$1"
+  [[ "$v" =~ ^[0-9]{1,18}$ ]] || v="$2"
+  printf '%d' "$((10#$v))"
+}
 
 set_fm() { # key value  (atomic update of a key ONLY within the first frontmatter block)
   # awk -v makes the value literal, so '&', '|', '/' in a value are safe (C2),
@@ -62,22 +93,38 @@ emit() { jq -n --arg m "$1" '{systemMessage:$m}'; }
 # leading <!-- ... --> comment BEFORE its '---' block, so key off the first
 # '---'-delimited block (f==1), exactly as the state-file reader does.
 card_field() { # file key
-  # Strip the "key: " prefix, then any trailing " # comment" (the shipped
-  # lesson-card template carries inline comments on its frontmatter lines —
-  # e.g. `severity: high   # how badly it bit`), then trim surrounding space.
-  # Without the comment-strip a filled card's severity becomes "high  # …",
-  # which fails the case match in build_catalog and silently drops the card.
-  awk -v k="$2" '
+  # Strip the "key: " prefix, then any trailing " # comment" AFTER the value
+  # (the shipped lesson-card template carries inline comments on several
+  # frontmatter lines — severity, hits, AND tags). For tags the strip must stop
+  # at the closing ']': a '#' INSIDE the brackets is content (issue refs like
+  # "#123", audit F12), only a comment after ']' is scaffolding. Tabs are
+  # normalized to "-" in every field (audit F11 + review): the catalog row is
+  # tab-delimited, so a literal tab in ANY field shifts every column after it.
+  local k="$2"
+  local val
+  val="$(awk -v k="$k" '
     BEGIN{f=0}
     /^---[[:space:]]*$/{f++; next}
     f==1 && index($0, k":")==1 {
       sub("^"k":[[:space:]]*","")
-      sub(/[[:space:]]+#.*$/,"")
-      gsub(/^[[:space:]]+|[[:space:]]+$/,"")
       print; exit
     }
     f>=2{exit}
-  ' "$1"
+  ' "$1")"
+  # awk, not sed: BSD sed lacks '\+' in BRE, GNU lacks -E parity — awk is
+  # portable and already a dependency. tags are handled separately below
+  # (bracket-internal '#' is content, not comment).
+  if [[ "$k" != "tags" ]]; then
+    val="$(printf '%s' "$val" | awk '{sub(/[ \t]+#.*$/, ""); print}')"
+  else
+    # Keep '#' INSIDE the brackets ("#123" issue refs); strip only a comment
+    # AFTER the closing ']' (the template's own "  # used to decide..." line).
+    val="$(printf '%s' "$val" | awk '{
+      if (match($0, /\][ \t]+#/)) { print substr($0, 1, RSTART-1); exit }
+      print; exit
+    }')"
+  fi
+  printf '%s' "$val" | tr '\t' '-' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
 # Build a metadata-only catalog: one line per valid card, ranked severity
@@ -123,7 +170,7 @@ ACTIVE="$(fm active)"
 # hand edit or a failed teardown write can leave active:true — never re-inject
 # a finished loop on that account.
 case "$(fm status)" in
-  paused-checkpoint|paused-context|paused-max|paused|done|cancelled) exit 0 ;;
+  paused-checkpoint|paused-context|paused-max|paused-stale|paused|done|cancelled) exit 0 ;;
 esac
 
 # ---- session isolation ---------------------------------------------------
@@ -138,25 +185,33 @@ fi
 [[ -n "$STATE_SESSION" && -n "$HOOK_SESSION" && "$STATE_SESSION" != "$HOOK_SESSION" ]] && exit 0
 
 STATUS="$(fm status)"
-ITERATION="$(fm iteration)"; [[ "$ITERATION" =~ ^[0-9]+$ ]] || ITERATION=1
-PHASE="$(fm phase)";         [[ "$PHASE" =~ ^[0-9]+$ ]]     || PHASE=1
-MAX_ITER="$(fm max_iterations)";        [[ "$MAX_ITER" =~ ^[0-9]+$ ]]   || MAX_ITER=0
-CTX_BUDGET="$(fm context_budget_lines)";[[ "$CTX_BUDGET" =~ ^[0-9]+$ ]] || CTX_BUDGET=0
+ITERATION="$(num10 "$(fm iteration)" 1)"
+PHASE="$(num10 "$(fm phase)" 1)"
+MAX_ITER="$(num10 "$(fm max_iterations)" 0)"
+CTX_BUDGET="$(num10 "$(fm context_budget_lines)" 0)"
+STALE_LIMIT="$(num10 "$(fm stale_limit)" 3)"
+STALE="$(num10 "$(fm stale_count)" 0)"
 MISSION_GOAL="$(fm mission_goal)"
 LESSONS_ENABLED="$(fm lessons_enabled)";     [[ "$LESSONS_ENABLED" == "true" ]]   || LESSONS_ENABLED=false
 TODO_NEXT_ENABLED="$(fm todo_next_enabled)"; [[ "$TODO_NEXT_ENABLED" == "true" ]] || TODO_NEXT_ENABLED=false
 AUTONOMOUS="$(fm autonomous)";               [[ "$AUTONOMOUS" == "true" ]]        || AUTONOMOUS=false
+GAUNTLET="$(fm gauntlet)";                   [[ "$GAUNTLET" == "true" ]]          || GAUNTLET=false
 
-# ---- autonomous safety backstop ------------------------------------------
+# ---- safety backstop (autonomous AND gated) -------------------------------
 # Autonomous loops force HAS_CHECKPOINT=0 (below), so the per-loop checkpoint
 # can't pause them — only <repete-done>, max_iterations, and the context budget
 # can. If BOTH numeric budgets are disabled (0), a buggy/unreachable mission
 # goal would block Stop forever with no out-of-band escape. Refuse that trap:
 # stamp a conservative iteration cap into state (visible to statusline and
 # /repete-status), and tell the user once. They can raise or clear it.
+# GATED loops share the trap whenever the agent simply never emits a checkpoint
+# (51 consecutive iterations reproduced with no stop firing — audit F5): the
+# re-inject path has no other mechanical stop, so scope the backstop to ANY
+# active loop with both budgets 0. Failure direction: stamps a cap (toward the
+# human), never tears down.
 AUTO_CAP_DEFAULT=25
 AUTO_CAP_APPLIED=0
-if [[ "$AUTONOMOUS" == "true" && "$MAX_ITER" -eq 0 && "$CTX_BUDGET" -eq 0 ]]; then
+if [[ "$MAX_ITER" -eq 0 && "$CTX_BUDGET" -eq 0 ]]; then
   MAX_ITER="$AUTO_CAP_DEFAULT"
   set_fm max_iterations "$MAX_ITER"
   AUTO_CAP_APPLIED=1
@@ -200,22 +255,59 @@ printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'exit(/<repete-checkpoint>.*?<\/repe
 # any sentinel; if it does so by accident, the pass-2 budget yield below must
 # still win — otherwise a stray <repete-checkpoint>/<repete-done> would divert
 # the loop out of the /clear flow. Suppress sentinel handling in this state.
+# (STALE_NOTE is initialized OUTSIDE the guard: the summarizing path skips the
+# sentinel block entirely but still flows through the re-inject assembly below.)
+STALE_NOTE=""
 if [[ "$STATUS" != "summarizing" ]]; then
 
 # ---- (1) mission done? ----------------------------------------------------
+# Sentinel extraction takes the LAST occurrence (greedy .* before the opener):
+# agents legitimately quote the syntax earlier in a message ("the sentinel looks
+# like <repete-done>example</repete-done>") before emitting the real one, and the
+# first-occurrence capture mis-judged those as the actual claim (audit F3) —
+# bumping stale_count on a correct claim or promoting a scratch payload.
+# A done-claim that does NOT match mission_goal used to fall through silently:
+# the agent got zero feedback and re-claimed with the same wrong string until a
+# budget rescued the loop. Now the mismatch is counted (stale_count) and fed
+# back into the re-inject; a run of consecutive mismatches (stale_limit, default
+# 3, 0=off) yields paused-stale to the human — a budget-class stop, so it is
+# allowed to stop even an autonomous loop. Failure direction: never tears the
+# loop down, never blocks past the yield — worst case is yielding to the human,
+# the safe direction. Suppressed while 'summarizing' with the other sentinels.
 if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]]; then
-  DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
-  if [[ -n "$DONE" && "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
-    set_fm status "done"
-    set_fm active false
-    emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
-    exit 0
+  DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /.*<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
+  if [[ -n "$DONE" ]]; then
+    if [[ "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
+      set_fm status "done"
+      set_fm active false
+      emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
+      exit 0
+    # Mismatched done-claim: count it, tell the agent why it was rejected.
+    elif [[ "$STALE_LIMIT" -gt 0 ]]; then
+      STALE=$((STALE + 1))
+      set_fm stale_count "$STALE"
+      if [[ "$STALE" -ge "$STALE_LIMIT" ]]; then
+        set_fm status paused-stale
+        emit "🧭 repete: ${STALE} consecutive done-claims did not match the mission goal (limit ${STALE_LIMIT}, phase ${PHASE}). The loop may be spinning on a false claim of done. Review .repete/MISSION.md: fix the goal string, edit stale_limit, reset stale_count and /repete-continue — or /repete-cancel."
+        exit 0
+      fi
+      STALE_NOTE="--- repete: your <repete-done> claim does NOT match the stored mission goal (claim ${STALE}/${STALE_LIMIT}). Either the work is not actually done, or you are quoting the goal string wrong: re-read .repete/MISSION.md and copy the exact goal. Do not re-emit the same claim unchanged."
+    fi
+  else
+    # No done-sentinel this turn: the agent did work, not a false claim. Reset
+    # the run (write only if non-zero — no pointless write on every Stop).
+    # Deliberate: an agent interleaving real work with claims resets, which
+    # protects stage-wise approaches from false positives.
+    if [[ "$STALE" -gt 0 ]]; then
+      set_fm stale_count 0
+      STALE=0
+    fi
   fi
 fi
 
 # ---- (2) loop exit goal hit -> checkpoint for the user --------------------
 if [[ $HAS_CHECKPOINT -eq 1 ]]; then
-  PAYLOAD="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /<repete-checkpoint>(.*?)<\/repete-checkpoint>/s' 2>/dev/null)"
+  PAYLOAD="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /.*<repete-checkpoint>(.*?)<\/repete-checkpoint>/s' 2>/dev/null)"
   printf '%s\n' "$PAYLOAD" > "$TRANSITION_FILE"
   set_fm status paused-checkpoint
   emit "⏸ repete checkpoint (phase ${PHASE}, iteration ${ITERATION}). Proposed next payload → .repete/transition.md. Review/edit it, then /repete-continue to launch the next loop, or /repete-cancel to stop."
@@ -284,6 +376,10 @@ if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
     # minimal, focused brief — not the full payload/catalog/protocol.
     # Truncate any stale handoff first, so pass-2's filled-content test proves
     # THIS cycle's agent actually wrote one, not that an old snapshot lingers.
+    # A mismatched done-claim from THIS Stop still gets its feedback here: the
+    # /clear wipes the conversation, so if the stale note rode only the normal
+    # re-inject the agent would never see it after rehydrate — the counter
+    # advances toward paused-stale with the reason lost (audit F2).
     : > "$REPETE_DIR/handoff.md"
     set_fm status summarizing
     HANDOFF_REINJECT='--- repete context checkpoint: write a handoff snapshot, then STOP ---
@@ -296,6 +392,12 @@ Write .repete/handoff.md (overwrite it) with these sections, tight — under ~30
 - Open questions & risks: anything unresolved the next session must know.
 
 Write durable facts to their normal homes too if not already there (loop body, .repete/todo-next.md, a lesson card, a commit). Then STOP. Do NOT continue the loop work, and do NOT emit <repete-checkpoint> or <repete-done>.'
+    # Prepend any stale-note AFTER the definition (audit F2): a mismatched
+    # done-claim on this same Stop must still reach the agent — the /clear ahead
+    # wipes the conversation, so this re-inject is the note's only ride.
+    [[ -n "$STALE_NOTE" ]] && HANDOFF_REINJECT="$STALE_NOTE
+
+$HANDOFF_REINJECT"
     jq -n --arg r "$HANDOFF_REINJECT" --arg m "🧹 repete · context budget reached — saving handoff snapshot before /clear" \
       '{decision:"block", reason:$r, systemMessage:$m}'
     exit 0
@@ -331,7 +433,7 @@ PAYLOAD_BODY="$(awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$STATE_FIL
 # --- lessons catalog (metadata only; bodies are agent-retrieved on demand) -
 CATALOG=""
 if [[ "$LESSONS_ENABLED" == "true" ]]; then
-  CATALOG_CAP="$(fm lesson_catalog_cap)"; [[ "$CATALOG_CAP" =~ ^[0-9]+$ ]] || CATALOG_CAP=8
+  CATALOG_CAP="$(num10 "$(fm lesson_catalog_cap)" 8)"
   CATALOG="$(build_catalog "$CATALOG_CAP")"
 fi
 
@@ -401,15 +503,58 @@ if [[ "$LESSONS_ENABLED" == "true" ]]; then
 fi
 PROTO+="$RULES_EXTRA"
 
-# --- assemble re-inject: brief, [catalog], [constitution], protocol LAST ---
+# --- gauntlet working rules (opt-in builder/critic rounds) ------------------
+# Failure direction: every path degrades to "no gauntlet rules injected" — never
+# to a blocked Stop or a new exit. Bad flag -> off (read above); unreadable
+# template -> GAUNTLET_FALLBACK (fail-functional, same philosophy as
+# PROTO_FALLBACK: the loop must never silently lose its working rules); missing
+# critique.md -> no pointer line. Sidechain guard already makes stray sentinels
+# from builder/critic subagents harmless.
+GAUNTLET_RULES=""
+# Prerequisites gate (audit F10): the gauntlet ruleset presupposes a reference to
+# A/B against and a bar to judge by. Injecting it with either key empty instructs
+# the agent to run critic rounds "against the reference" with nothing to
+# reference — iteration-burning critique theater. Failure direction: withhold
+# the rules (degrade to a plain loop), never block; the flag stays set so
+# /repete-status still shows intent.
+GAUNTLET_REF="$(fm reference)"; [[ "$GAUNTLET_REF" == "null" ]] && GAUNTLET_REF=""
+GAUNTLET_BAR="$(fm bar)";       [[ "$GAUNTLET_BAR" == "null" ]] && GAUNTLET_BAR=""
+if [[ "$GAUNTLET" == "true" && -n "$GAUNTLET_REF" && -n "$GAUNTLET_BAR" ]]; then
+  GAUNTLET_FALLBACK='
+--- gauntlet working rules (builder/critic rounds · reference-driven) ---
+Maintain .repete/parts.md (part · judgeable criterion · status). One builder subagent per
+part — give it the part, the criterion, the paths, nothing else; never two builders on one
+file. Integrate on the main thread. Every round: ONE fresh-context critic subagent gets the
+reference, this round and the previous round via git show (unlabeled), the parts list, the
+bar — never your reasoning. It picks a winner and names the single largest gap; write its
+verdict to .repete/critique.md, first line WINNER: <round>|none. The named gap is the next
+round'"'"'s top priority. When every part reaches the bar: ONE final integration critic over
+the whole artifact. Only claim <repete-done> after that final integration pass agrees the
+mission goal is verifiably true.'
+  GAUNTLET_RULES=""
+  [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]] && GAUNTLET_RULES="$(cat "${CLAUDE_PLUGIN_ROOT}/templates/gauntlet.md" 2>/dev/null)"
+  [[ -n "$GAUNTLET_RULES" ]] || GAUNTLET_RULES="$GAUNTLET_FALLBACK"
+  # Last critic verdict pointer: first line only (WINNER: ...) — metadata, not a body;
+  # injecting the whole critique every iteration would re-create the context rot the
+  # catalog rules fight. Missing/empty file -> no pointer, rules still injected.
+  # -f AND -s: '-s' alone is true for a directory, which would append a bogus
+  # empty-verdict pointer and run head on a directory (audit cut + Copilot review).
+  if [[ -f "$REPETE_DIR/critique.md" && -s "$REPETE_DIR/critique.md" ]]; then
+    GAUNTLET_RULES+="$(printf '\nLast critic verdict (.repete/critique.md): %s\n' "$(head -1 "$REPETE_DIR/critique.md" 2>/dev/null)")"
+  fi
+fi
+
+# --- assemble re-inject: brief, [stale note], [catalog], [constitution], [gauntlet], protocol LAST ---
 REINJECT="$PAYLOAD_BODY"
+[[ -n "$STALE_NOTE" ]] && REINJECT+=$'\n\n'"$STALE_NOTE"
 [[ -n "$CATALOG" ]] && REINJECT+=$'\n\n'"$CATALOG"
 [[ -n "$CONSTITUTION" ]] && REINJECT+=$'\n\n--- project invariants (.repete/constitution.md) ---\n'"$CONSTITUTION"
+[[ -n "$GAUNTLET_RULES" ]] && REINJECT+=$'\n\n'"$GAUNTLET_RULES"
 REINJECT+=$'\n'"$PROTO"
 
 SYSMSG="🔄 repete · phase ${PHASE} · iteration ${NEXT}"
 if [[ "$AUTO_CAP_APPLIED" -eq 1 ]]; then
-  SYSMSG+=$'\n🛟 repete: autonomous loop had no cap and no context budget — applied a safety max_iterations='"${AUTO_CAP_DEFAULT}"$' so a stuck mission can'"'"'t block Stop forever. Edit .repete/loop.local.md to raise or change it.'
+  SYSMSG+=$'\n🛟 repete: loop had no cap and no context budget — applied a safety max_iterations='"${AUTO_CAP_DEFAULT}"$' so a stuck loop can'"'"'t block Stop forever. Edit .repete/loop.local.md to raise or change it.'
 fi
 jq -n --arg r "$REINJECT" --arg m "$SYSMSG" \
   '{decision:"block", reason:$r, systemMessage:$m}'

@@ -33,14 +33,17 @@ Two kinds of code live here and they fail differently:
 1. **`hooks/stop-hook.sh` — the decision order.** The checks run in a deliberate
    sequence, and most of the subtle guarantees live in that ordering, not in any single
    check: state-file exists → jq exists (else fail open) → `active` → terminal/paused
-   statuses exit → session isolation (stamp on first sight) → autonomous no-budget
-   backstop → read last main-thread assistant message → sentinel handling (suppressed
-   while `summarizing`; checkpoint beats done; autonomous ignores checkpoint) → max-
+   statuses exit → session isolation (stamp on first sight) → no-budget backstop
+   (any active loop with both budgets 0 — gated included) → read last main-thread
+   assistant message → sentinel handling (suppressed
+   while `summarizing`; checkpoint beats done; autonomous ignores checkpoint; a
+   mismatched done-claim counts toward `stale_count`, annotates the re-inject, and at
+   `stale_limit` consecutive mismatches yields `paused-stale`) → max-
    iterations yield (skipped while `summarizing`) → context-budget two-step → stranded-
    `summarizing` recovery (re-applies the cap) → bump iteration → assemble re-inject
-   (body → catalog → constitution → protocol last). Do not reorder without re-deriving
-   why each earlier check must precede the later ones — the inline comments state the
-   reason at each site.
+   (body → [stale note] → catalog → constitution → [gauntlet rules] → protocol last). Do
+   not reorder without re-deriving why each earlier check must precede the later ones —
+   the inline comments state the reason at each site.
 2. **`.repete/loop.local.md` frontmatter schema** — the shared contract between the
    hook, the statusline, all four commands, and the tests. Adding a key means updating:
    the template, `commands/repete.md` scaffold instructions, the hook's `fm` reads, and
@@ -53,8 +56,8 @@ Two kinds of code live here and they fail differently:
    single-quoting in the hook is deliberate). If the template is unreadable the hook
    falls back to an inline core — the loop must never lose its sentinels.
 5. **The status state machine** — `running → summarizing → paused-context`,
-   `running → paused-checkpoint | paused-max`, terminal `done | cancelled`. Adding a
-   status means updating: the hook's early-exit case, `/repete-status`'s "what to do
+   `running → paused-checkpoint | paused-max | paused-stale`, terminal `done | cancelled`.
+   Adding a status means updating: the hook's early-exit case, `/repete-status`'s "what to do
    next" map, and `/repete-continue`'s branch list.
 
 ## Failure philosophy (the one rule)
@@ -70,6 +73,12 @@ tearing the loop down on a false positive. Concrete embodiments:
   bug fixed in v0.1.4).
 - Done-goal match is deliberately strict (exact string, whitespace-normalized): the
   cheap failure is burning iterations, the expensive one is a false teardown.
+- **A mismatched done-claim is counted and fed back, not silent** (v0.2.0): `stale_count`
+  bumps, a rejection note rides the next re-inject, and `stale_limit` (default 3, `0` off,
+  unparseable → 3 — fail toward the human) consecutive mismatches yield `paused-stale`. A
+  plain work turn (no done sentinel) resets the count — deliberate, so stage-wise loops
+  don't false-trip. The yield is budget-class: it stops even autonomous loops, because a
+  loop that repeatedly false-claims done is exactly the failure it exists to catch.
 - A stray sentinel during `summarizing` is ignored: the budget two-step owns that Stop.
 
 If you add a check, decide its failure direction first and write it in a comment.
@@ -81,8 +90,11 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/handoff.md` section headings | Hook pass-1 re-inject brief AND pass-2 scaffolding-strip pattern | test: "Coupling lock: templates/handoff.md headings" |
 | `templates/protocol.md` placeholders | Hook substitution + `PROTO_FALLBACK` | test: "Protocol placeholders" |
 | `loop.local.md` frontmatter keys | Hook `fm` reads, `commands/repete.md` scaffold, `/repete-status`, test `scaffold()` | tests use the schema throughout |
-| Status values | Hook early-exit case, `/repete-continue` branches, `/repete-status` map | tests: paused/terminal blocks |
-| Sentinel strings | Hook, protocol, all commands, README, both skills | tests grep re-inject for both |
+| Status values | Hook early-exit case, `/repete-continue` branches, `/repete-status` map, statusline `case` (renders `·ck/·ctx/·max/·stale` markers — a new status silently renders as healthy) | tests: paused/terminal blocks |
+| `stale_count`/`stale_limit` keys | Hook `fm` reads + mismatch branch, `templates/loop.local.md`, `/repete` scaffold prose, `/repete-status` budgets line, `/repete-continue` paused-stale branch | tests: stale blocks |
+| `gauntlet`/`reference`/`bar` keys | Hook `fm` read + gauntlet injection block, `templates/loop.local.md`, `/repete` optional-features, `/repete-status` gauntlet section, tests scaffold comment | tests: gauntlet blocks |
+| `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the test coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md" |
+| Sentinel strings | Hook + README always; `<repete-done>` also protocol + running skill + /repete; `<repete-checkpoint>` also running skill + /repete-continue (NOT protocol.md — the frozen core stays quiet; the rule rides RULES_EXTRA) | tests: doc-lock block |
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
 | `tests/run-all.sh` checks | `.github/workflows/ci.yml` (and vice versa) | not enforced — keep in sync by hand |
@@ -91,6 +103,22 @@ If you add a check, decide its failure direction first and write it in a comment
 
 - **`set -uo pipefail` without `-e` is deliberate.** Much of the hook treats non-zero
   as data (grep misses, perl sentinel probes). Adding `-e` will break it subtly.
+- **`STALE_NOTE` is initialized OUTSIDE the `summarizing` guard.** The summarizing path
+  skips the whole sentinel block but still flows through the re-inject assembly, which
+  reads `STALE_NOTE` — under `set -u` an init placed inside the guard crashes every
+  summarizing-path Stop. Same trap applies to any future variable set inside a guarded
+  block but consumed after it.
+- **`fm()` reads the FIRST occurrence of a key; the test `scaffold()` only APPENDS.** A
+  default value seeded in the scaffold plus a `scaffold 'key: override'` extra yields two
+  keys and the hook silently reads the default — the exact trap the backstop tests'
+  comment warns about, rediscovered for `gauntlet`. Seed nothing you intend to override;
+  use `setstate` to mutate.
+- **`GAUNTLET_FALLBACK` mirrors `PROTO_FALLBACK`** (and `critique.md`'s pointer is
+  first-line-only): the loop must never silently lose its working rules when the template
+  is unreadable, and the critique pointer stays metadata — injecting critique bodies every
+  iteration would re-create the context rot the catalog rules fight. The pointer is
+  appended AFTER the template/fallback resolution, so BOTH paths carry it when
+  critique.md exists (verified by review).
 - **`set_fm` updates only the first frontmatter block and appends missing keys before
   the closing `---`** (C1/C2/C3 in the comments). It uses `awk -v`, which treats
   backslashes in values as escapes — fine for everything written today (statuses,
@@ -105,7 +133,12 @@ If you add a check, decide its failure direction first and write it in a comment
   safe one. Autonomous mode instead forces `HAS_CHECKPOINT=0` so only done/budgets stop it.
 - **The autonomous backstop** (both budgets 0 → stamp `max_iterations: 25`) exists so a
   buggy mission goal can never block Stop forever. It must persist to state (C3) or it
-  warns every iteration.
+  warns every iteration. Since the 2026-08 audit it applies to GATED loops too — a gated
+  loop whose agent never checkpoints has no other mechanical stop (51 consecutive
+  iterations reproduced). Any active loop with both budgets 0 gets the cap.
+- **Gauntlet rules require `reference:` AND `bar:` non-empty** (audit F10): injecting
+  builder/critic rules with nothing to reference is iteration-burning theater. The hook
+  gates on both keys; the flag alone is not enough.
 - **Constitution/handoff "emptiness" tests strip scaffolding literally** — HTML
   comments, the template's exact headings, whole-line `<placeholders>`. Stripping any
   `#`-leading line instead would misclassify real content like "# TODO finish parser".
@@ -143,3 +176,24 @@ If you add a check, decide its failure direction first and write it in a comment
    loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
 5. **v2/v3 roadmap** (README): phased missions; global lesson store with
    recurrence-gated promotion. The state model was designed to extend to both.
+6. **Per-Stop transcript cost is O(whole transcript)** (audit F13, measured 342MB RSS /
+   ~2.8s per Stop on a 32MB transcript, re-paid every iteration). A naive tail-bound is
+   UNSAFE (500 trailing sidechain lines can hide the last main-thread sentinel —
+   fail-closed); the fix needs a grow-the-window scan that falls back to a full read
+   when the window comes up sentinel-blind. Own engagement; don't bolt onto another fix.
+   The fm() fork count (~60/Stop) is real but millisecond-scale — batch opportunistically,
+   never urgently.
+7. **Audit cuts still open** (from the 2026-08-16 max audit, verified but unfixed):
+   `set_fm`'s awk -v backslash mangling (UUID-safe today — switch to ENVIRON if free-text
+   values ever land in frontmatter); set_fm C3 append no-ops on a state file missing its
+   closing `---` (backstop re-warns every Stop); bare `paused` status vestige (no writer,
+   no resume branch — remove or wire); the "keep/!update" garble lineage in
+   repete-continue step 4 (fixed wording, watch regressions); missing tests for no-jq
+   exit-0 and stranded-summarizing cap re-application; ck `jq | grep -q` SIGPIPE
+   false-FAIL on >64KB payloads (dormant under current fixtures — switch to `jq -e`
+   predicates when touched).
+
+## Operator
+
+@OPERATOR.md — it is this session's operating charter. Local and gitignored: in a fresh
+clone this import silently no-ops — run `/cc-operator:start` to materialize the charter.

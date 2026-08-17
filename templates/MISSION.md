@@ -18,9 +18,12 @@ GOAL: <one-line, verifiable completion statement>
 - <what "done" actually means — the checks that prove the goal is true>
 - <e.g. "all tests in suite X green", "endpoint Y returns Z", "doc W covers cases A–C">
 
-## Out of scope (do NOT do these — log them to todo-next.md instead)
+## Out of scope (do NOT do these)
 
 - <things that will tempt the loop but belong to a later run>
+- Park out-of-scope finds in `.repete/todo-next.md` — but ONLY if `todo_next_enabled: true`
+  in loop.local.md (the file and its journaling rule don't exist otherwise; the finds would
+  vanish). Otherwise name them at the checkpoint for the human to triage.
 
 ## Constraints
 

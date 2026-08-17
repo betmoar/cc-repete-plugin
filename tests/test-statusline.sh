@@ -76,4 +76,68 @@ perl -i -pe 's/\n/\r\n/' "$TMP/.repete/loop.local.md"   # BSD sed -i can't add C
 OUT="$(run)"
 ck "shows rp[4/8] with CRLF endings" '[ "$OUT" = "rp[4/8]" ]'
 
+echo "== Octal leading-zero max: treated as DECIMAL, cap still shown (audit F1) =="
+mkstate true 3 09
+OUT="$(run 2>/dev/null)"
+ck "shows rp[3/9], not octal-error fallback rp[3]" '[ "$OUT" = "rp[3/9]" ]'
+mkstate true 3 08
+OUT="$(run 2>/dev/null)"
+ck "shows rp[3/8] for 08 too" '[ "$OUT" = "rp[3/8]" ]'
+mkstate true 3 011
+OUT="$(run 2>/dev/null)"
+ck "shows rp[3/11] for 011 (not 9)" '[ "$OUT" = "rp[3/11]" ]'
+
+echo "== Quoted values: parity with the hook's fm() (audit F9) =="
+mkstate true 3 10
+# perl -i (not sed -i ''): BSD/GNU-portable, same approach as the CRLF block above
+perl -i -pe 's/^active: true/active: "true"/; s/^iteration: 3/iteration: "3"/; s/^max_iterations: 10/max_iterations: "10"/' "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "quoted active/iter/max still render rp[3/10]" '[ "$OUT" = "rp[3/10]" ]'
+
+echo "== Status differentiation: paused renders distinct from running (audit F14) =="
+mkstate true 3 10
+for st in paused-checkpoint paused-context paused-max paused-stale; do
+  # inject a status key into the frontmatter (mkstate doesn't carry it)
+  awk -v s="$st" 'NR==2{print "status: " s} {print}' "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+  OUT="$(run)"
+  ck "status $st renders a pause marker" 'printf "%s" "$OUT" | grep -q "·"'
+done
+# transient summarizing renders PLAIN (no pause marker): it is a normal in-flight
+# turn, not a wait-on-human state
+awk 'NR==2{print "status: summarizing"} {print}' "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "status summarizing renders plain (transient)" '[ "$OUT" = "rp[3/10]" ]'
+mkstate true 3 10
+awk 'NR==2{print "status: running"} {print}' "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "status running renders plain rp[3/10]" '[ "$OUT" = "rp[3/10]" ]'
+
+echo "== UTF-8 BOM state file: loop still renders (audit F7) =="
+mkstate true 5 10
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "BOM file still renders rp[5/10]" '[ "$OUT" = "rp[5/10]" ]'
+
+echo "== No perl on PATH: normal state still renders (fail-open) =="
+MINBIN="$(mktemp -d)"
+while IFS= read -r t; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$MINBIN/$t"
+done < <(printf '%s\n' bash sh cat grep sed awk tr printf env ln)
+rm -f "$MINBIN/perl"
+mkstate true 5 10
+OUT="$(printf '{"workspace":{"project_dir":"%s"}}' "$TMP" \
+  | env PATH="$MINBIN" CLAUDE_PROJECT_DIR="$TMP" bash "$SEG" 2>/dev/null)"
+ck "no-perl: renders rp[5/10] via raw read" '[ "$OUT" = "rp[5/10]" ]'
+
+echo "== num10 overflow: huge max renders as uncapped, never wraps negative =="
+mkstate true 3 99999999999999999999999999
+OUT="$(run 2>/dev/null)"
+ck "overflow max -> rp[3] uncapped (default 0), not garbage" '[ "$OUT" = "rp[3]" ]'
+
+echo "== Quoted status value still renders its pause marker (F14 + quote parity) =="
+mkstate true 3 10
+perl -i -pe 's/^iteration: 3/iteration: "3"\nstatus: "paused-stale"/' "$TMP/.repete/loop.local.md"
+OUT="$(run)"
+ck "quoted status paused-stale renders marker" 'printf "%s" "$OUT" | grep -q "stale"'
+
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]
