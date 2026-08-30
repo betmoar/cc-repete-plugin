@@ -2,6 +2,18 @@
 # cc-repete hook smoke tests. Run from anywhere: bash tests/test-hooks.sh
 # shellcheck disable=SC2016,SC2034  # ck() takes each assertion as a literal
 # string and evals it, so single quotes are deliberate and $OUT is used there.
+#
+# ASSERTION CONVENTION (issue #17): prefer a `jq -e` predicate over
+# `jq -r ... | grep -q ...`. Under pipefail, grep -q exits at the first match and
+# jq takes SIGPIPE, so the pipeline status is non-zero and the assertion FAILS
+# even though the string was found. Harmless on today's small fixtures, a flake
+# waiting to happen on any payload over the ~64KB pipe buffer (a long catalog, a
+# big constitution). The jq -e form makes the exit code itself the assertion:
+#   good: printf "%s" "$OUT" | jq -e '.reason | test("Known lessons")' >/dev/null
+#   bad:  printf "%s" "$OUT" | jq -r .reason | grep -q "Known lessons"
+# Note test() takes a REGEX — escape . * [ ] ( ) etc. when matching literals.
+# Existing grep-form assertions are migrated opportunistically when touched;
+# every NEW assertion uses jq -e.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 H="$ROOT/hooks/stop-hook.sh"
@@ -767,5 +779,161 @@ echo "== Coupling lock: templates/handoff.md headings match the hook's scaffoldi
 while IFS= read -r heading; do
   ck "hook knows heading: $heading" "grep -qF \"$heading\" \"$H\""
 done < <(grep -E '^## ' "$ROOT/templates/handoff.md" | sed 's/^## //')
+
+# ---------------------------------------------------------------------------
+# v0.2.1 fixes (issues #7, #10, #11, #12, #16, #18). New assertions use the
+# jq -e predicate form documented in the header.
+# ---------------------------------------------------------------------------
+
+# Transcript builder for the #18 cases: takes N raw JSONL rows verbatim.
+mkrows(){ printf '%s\n' "$@" > "$TMP/t.jsonl"; }
+atext(){   printf '{"message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}' "$1"; }
+atool(){   printf '%s' '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}'; }
+uresult(){ printf '%s' '{"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'; }
+uprompt(){ printf '{"message":{"role":"user","content":[{"type":"text","text":"%s"}]}}' "$1"; }
+
+echo "== #18: done-claim followed by tool_use entries still tears the loop down =="
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atool)" "$(uresult)" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: tool_use tail does not hide the done claim" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "#18: loop torn down (active false)"              'grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: mismatched claim behind a tool_use tail still counts (stale detector reachable) =="
+scaffold ""
+mkrows "$(atext '<repete-done>not the goal</repete-done>')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: mismatch behind tool tail bumps stale_count" 'grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
+ck "#18: mismatch still re-injects with feedback"     'printf "%s" "$OUT" | jq -e ".decision==\"block\" and (.reason | test(\"does NOT match\"))" >/dev/null'
+
+echo "== #18: checkpoint behind a tool_use tail still pauses (gated) =="
+scaffold ""
+mkrows "$(atext '<repete-checkpoint>next payload here</repete-checkpoint>')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: checkpoint behind tool tail pauses" 'grep -qE "^status: paused-checkpoint" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: a LATER text entry with no sentinel wins over an earlier claim (same turn) =="
+# Guards the other direction: the scan must not reach back past a real text reply.
+# The agent claimed done, then kept talking without re-claiming -> no teardown.
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atext 'actually wait, one more thing')"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: later text-bearing entry wins -> no teardown" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "#18: loop re-injects instead"                      'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== #18: turn boundary — a spent sentinel from a PREVIOUS turn is not re-fired =="
+# A real user prompt starts a new turn. The current turn has no text at all
+# (tool_use only), so the scan must yield "" rather than reaching back.
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(uprompt 'keep going')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: previous-turn done not re-fired" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "#18: turn-bounded scan re-injects"    'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== #18: tool_result rows do NOT start a new turn (claim before them still seen) =="
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(uresult)" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: tool_result is not a turn boundary" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: sidechain text still ignored under the new scan =="
+scaffold ""
+mkrows "$(atext 'main thread work')" \
+       '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"<repete-done>all tests pass</repete-done>"}]}}' \
+       "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: sidechain done still ignored" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+
+echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
+scaffold ""
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"a\\\\nb\\\\tc\"}")"
+ck "#10: backslashes survive verbatim (no awk escape processing)" \
+   'grep -qF "session_id: \"a\\nb\\tc\"" "$TMP/.repete/loop.local.md"'
+ck "#10: loop still re-injects after the write" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== #11: state file with no closing fence -> key still lands, no re-warn =="
+scaffold 'autonomous: true'
+# Strip the CLOSING fence only (keep the opener), and drop max_iterations so the
+# backstop must APPEND it: the exact shape that used to no-op forever.
+awk '!/^max_iterations:/' "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; if(f==2) next} {print}' "$TMP/.repete/loop.local.md" > "$TMP/s" \
+  && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+ck "#11: fixture really has no closing fence" '[ "$(grep -cE "^---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 1 ]'
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#11: backstop cap persisted despite missing fence" 'grep -qE "^max_iterations: 25" "$TMP/.repete/loop.local.md"'
+ck "#11: fence repaired so the block is parseable"     '[ "$(grep -cE "^---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 2 ]'
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#11: second Stop does not re-warn" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"safety max_iterations\")" >/dev/null'
+
+echo "== #12: bare 'paused' is not an early-exit status (dead vestige removed) =="
+scaffold ""
+setstate status paused
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#12: bare paused does not silently exit" '[ -n "$OUT" ]'
+ck "#12: unknown status re-injects (treated as running)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== #7/#16: no jq on PATH -> exactly one warning, then silence, state untouched =="
+NOJQBIN="$(mktemp -d)"
+while IFS= read -r t; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$NOJQBIN/$t"
+done < <(printf '%s\n' bash sh cat grep sed awk tr printf head wc env ln perl)
+rm -f "$NOJQBIN/jq"
+scaffold ""
+mktx "did some work"
+BEFORE="$(cat "$TMP/.repete/loop.local.md")"
+NOJQ1="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$NOJQBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
+NOJQ_RC=$?
+ck "#7: no-jq exits 0 (fail open)"            '[ "$NOJQ_RC" -eq 0 ]'
+ck "#7: first no-jq Stop warns"               'printf "%s" "$NOJQ1" | jq -e ".systemMessage | test(\"jq is not on PATH\")" >/dev/null'
+ck "#7: warning is NOT a block decision"      '! printf "%s" "$NOJQ1" | jq -e "has(\"decision\")" >/dev/null'
+ck "#7: marker file written"                  '[ -f "$TMP/.repete/.warned-nojq" ]'
+NOJQ2="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$NOJQBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
+ck "#16: second no-jq Stop is silent (warn once)" '[ -z "$NOJQ2" ]'
+ck "#16: no-jq leaves state byte-identical"      '[ "$BEFORE" = "$(cat "$TMP/.repete/loop.local.md")" ]'
+# An inactive loop must stay quiet even on the first no-jq Stop.
+scaffold ""
+setstate active false
+NOJQ3="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$NOJQBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
+ck "#7: inactive loop + no jq stays silent" '[ -z "$NOJQ3" ]'
+ck "#7: inactive loop writes no marker"     '[ ! -f "$TMP/.repete/.warned-nojq" ]'
+
+echo "== #16: stranded summarizing re-applies the cap on the SAME Stop =="
+# status summarizing + no longer over budget + iteration already at the cap:
+# the max-iterations yield was skipped by the summarizing guard, so the recovery
+# path must re-apply it now — not one wasted cycle later.
+scaffold ""
+setstate status summarizing
+setstate max_iterations 3
+setstate iteration 3
+setstate context_budget_lines 10000   # far above the fixture: budget path cannot fire
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#16: stranded+at-cap yields paused-max"      'grep -qE "^status: paused-max" "$TMP/.repete/loop.local.md"'
+ck "#16: no re-inject on that Stop"              '! printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+ck "#16: iteration NOT bumped past the cap"      'grep -qE "^iteration: 3$" "$TMP/.repete/loop.local.md"'
+ck "#16: systemMessage names the cap"            'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"max_iterations\")" >/dev/null'
+
+echo "== #16: transition.md is written verbatim and truncated first =="
+scaffold ""
+printf 'STALE PAYLOAD FROM AN EARLIER LOOP\nsecond line\nthird line\n' > "$TMP/.repete/transition.md"
+mktx "<repete-checkpoint>line one\\nline two with # and \$dollar\\nline three</repete-checkpoint>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#16: payload written verbatim (all lines)" \
+   '[ "$(cat "$TMP/.repete/transition.md")" = "$(printf "line one\nline two with # and \$dollar\nline three")" ]'
+ck "#16: prior content truncated, not appended" '! grep -q "STALE PAYLOAD" "$TMP/.repete/transition.md"'
+
+echo "== #16: doc-lock — bare 'paused' gone from the hook early-exit case =="
+# Extract the early-exit case arm and assert every alternative is a known status.
+# A bare 'paused' (or any newly-invented value) fails here.
+EXIT_ARM="$(grep -E '^[[:space:]]*paused-checkpoint\|' "$H" | head -1 | sed 's/).*//' | tr -d '[:space:]')"
+ck "#16: early-exit arm found" '[ -n "$EXIT_ARM" ]'
+ck "#16: early-exit arm is exactly the documented status set" \
+   '[ "$EXIT_ARM" = "paused-checkpoint|paused-context|paused-max|paused-stale|done|cancelled" ]'
 
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

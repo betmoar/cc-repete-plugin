@@ -34,8 +34,8 @@ Two kinds of code live here and they fail differently:
    sequence, and most of the subtle guarantees live in that ordering, not in any single
    check: state-file exists → jq exists (else fail open) → `active` → terminal/paused
    statuses exit → session isolation (stamp on first sight) → no-budget backstop
-   (any active loop with both budgets 0 — gated included) → read last main-thread
-   assistant message → sentinel handling (suppressed
+   (any active loop with both budgets 0 — gated included) → read the last
+   text-bearing main-thread assistant message of the CURRENT turn → sentinel handling (suppressed
    while `summarizing`; checkpoint beats done; autonomous ignores checkpoint; a
    mismatched done-claim counts toward `stale_count`, annotates the re-inject, and at
    `stale_limit` consecutive mismatches yields `paused-stale`) → max-
@@ -57,6 +57,8 @@ Two kinds of code live here and they fail differently:
    falls back to an inline core — the loop must never lose its sentinels.
 5. **The status state machine** — `running → summarizing → paused-context`,
    `running → paused-checkpoint | paused-max | paused-stale`, terminal `done | cancelled`.
+   That list is exhaustive: bare `paused` was removed in v0.2.1 (no writer, no resume
+   branch — dead surface, issue #12), and a test locks it out of the early-exit case.
    Adding a status means updating: the hook's early-exit case, `/repete-status`'s "what to do
    next" map, and `/repete-continue`'s branch list.
 
@@ -66,7 +68,10 @@ Two kinds of code live here and they fail differently:
 Stop through" or "keep looping within budgets" — never toward trapping the user or
 tearing the loop down on a false positive. Concrete embodiments:
 
-- No `jq` → exit 0 silently (can't steer, so don't intervene).
+- No `jq` → exit 0 (can't steer, so don't intervene) — but since v0.2.1 an ACTIVE loop
+  gets one hand-built JSON warning first (`.repete/.warned-nojq` marks it), because
+  "inert with zero signal" is a bad kind of open: the user sees a loop that never runs
+  and no reason why. Still exit 0 on every branch, marker write failure included.
 - Unparseable frontmatter values → numeric defaults, flags default off.
 - Malformed transcript lines → skipped per line (`fromjson?`), never abort the parse; a
   parse abort would blind sentinel detection and block every Stop (fail-closed — the
@@ -80,6 +85,11 @@ tearing the loop down on a false positive. Concrete embodiments:
   don't false-trip. The yield is budget-class: it stops even autonomous loops, because a
   loop that repeatedly false-claims done is exactly the failure it exists to catch.
 - A stray sentinel during `summarizing` is ignored: the budget two-step owns that Stop.
+- **A sentinel the agent really emitted must be SEEN** (v0.2.1, issue #18). Missing one
+  looks fail-open (the loop keeps going) but is a trap in practice: a correct done-claim
+  that the hook cannot see never tears down, never counts as stale, and never reaches the
+  human — the loop spins to its budget with the exit condition already satisfied. So
+  sentinel extraction reads the last text-bearing entry of the turn, not the last entry.
 
 If you add a check, decide its failure direction first and write it in a comment.
 
@@ -96,6 +106,8 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the test coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md" |
 | Sentinel strings | Hook + README always; `<repete-done>` also protocol + running skill + /repete; `<repete-checkpoint>` also running skill + /repete-continue (NOT protocol.md — the frozen core stays quiet; the rule rides RULES_EXTRA) | tests: doc-lock block |
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
+| Transcript scan shape (`$turn_start`, text-bearing pick) | The #18 test block (both directions: sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) | tests: `#18` blocks |
+| `.repete/.warned-nojq` marker path | Hook no-jq branch + the warning text that names it for deletion | tests: `#7` blocks |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
 | `tests/run-all.sh` checks | `.github/workflows/ci.yml` (and vice versa) | not enforced — keep in sync by hand |
 
@@ -120,9 +132,13 @@ If you add a check, decide its failure direction first and write it in a comment
   appended AFTER the template/fallback resolution, so BOTH paths carry it when
   critique.md exists (verified by review).
 - **`set_fm` updates only the first frontmatter block and appends missing keys before
-  the closing `---`** (C1/C2/C3 in the comments). It uses `awk -v`, which treats
-  backslashes in values as escapes — fine for everything written today (statuses,
-  numbers, UUID session ids); if a value could ever carry `\`, switch to `ENVIRON`.
+  the closing `---`** (C1/C2/C3 in the comments). Since v0.2.1 the value travels via
+  `ENVIRON["REPETE_FM_VAL"]`, not `awk -v` — `-v` runs the value through awk's escape
+  processing, so a literal `\` in a value was eaten (issue #10). Keep it that way if
+  free-text values ever land in frontmatter. Its `END` block is the fenceless-file
+  path (issue #11): a frontmatter that was opened and never closed used to make the
+  C3 append a silent no-op, so the backstop cap never persisted and the hook re-warned
+  every Stop; now the key is appended at EOF and the closing `---` is written after it.
 - **Iteration semantics:** `iteration` counts completed work turns; the cap check is
   `>=` *before* the bump, so `max_iterations: 3` = exactly 3 work turns. The handoff
   (`summarizing`) turn is free — no bump.
@@ -144,6 +160,21 @@ If you add a check, decide its failure direction first and write it in a comment
   `#`-leading line instead would misclassify real content like "# TODO finish parser".
 - **Body extraction prints-before-increment (I1)** so a `---` horizontal rule inside
   the loop body is preserved, not swallowed.
+- **Sentinel extraction reads the last TEXT-BEARING assistant entry of the current
+  turn, not the last entry** (issue #18). The harness appends an entry per content
+  block and per bookkeeping record, so a turn that claims done and then makes a tool
+  call ends with a `tool_use`-only entry whose text is `""` — the old `| last` read
+  that, blanking the claim: no teardown, and the mismatch branch never ran either, so
+  the loop re-injected forever with zero feedback to agent or stale detector. The scan
+  is bounded to the current turn (everything after the last main-thread `user` entry
+  that is not purely `tool_result` blocks — tool results are `role:user` too and must
+  not count as a boundary); without that bound a text-less turn would re-fire a spent
+  sentinel and re-pause at an already-approved checkpoint. Both directions are tested.
+- **The no-jq warning is hand-built JSON** (issue #7) — `emit()` needs jq, so that
+  branch `printf`s a fixed literal with no interpolation (hence no escaping concerns)
+  and marks `.repete/.warned-nojq` so it fires once. It is gated on `active: true`
+  (grep, not `fm()` — the frontmatter reader runs later) so a finished loop stays
+  quiet, and every branch still exits 0.
 - **Session isolation stamps on first sight** because commands can't reliably know the
   session id at setup. Every resume path in `/repete-continue` blanks `session_id` —
   a stale id makes the hook silently ignore the resumed session (looks like a dead loop).
@@ -162,36 +193,35 @@ If you add a check, decide its failure direction first and write it in a comment
 
 ## Residual risks / backlog (prioritized, with context)
 
-1. **No-jq degradation is silent.** The hook exits 0 without telling the user their
-   loop is inert. It cannot emit hook JSON without jq, but it *could* `printf` a
-   hand-built static JSON warning once (needs a "warned already" marker file to avoid
-   spamming every Stop). Low effort, real UX win.
-2. **`/repete-continue`'s checkpoint promotion is prompt-code** — the agent hand-edits
+1. **`/repete-continue`'s checkpoint promotion is prompt-code** — the agent hand-edits
    frontmatter (phase +1, iteration reset, blank session). A `hooks/promote.sh` the
    command shells out to would make it mechanical and testable. Medium effort.
-3. **Transcript parse trusts `.message.role` shape** beyond the guards added; if the
-   transcript format changes upstream, sentinel detection degrades open (loop keeps
-   iterating to budget). Watch Claude Code release notes.
-4. **`context_budget_lines` counts transcript lines, not tokens** — documented as a
+2. **Transcript parse trusts `.message.role` / `.type` shape.** v0.2.1 leans on it
+   harder: the turn boundary is "last main-thread `role:user` entry that is not purely
+   `tool_result` blocks". If the transcript format changes upstream, the boundary
+   degrades to "scan everything" (the pre-v0.2.1 scope, fail-open) — but watch Claude
+   Code release notes, and re-check `hooks/stop-hook.sh`'s `$turn_start` if the shape
+   of user/tool_result entries moves.
+3. **`context_budget_lines` counts transcript lines, not tokens** — documented as a
    loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
-5. **v2/v3 roadmap** (README): phased missions; global lesson store with
+4. **v2/v3 roadmap** (README): phased missions; global lesson store with
    recurrence-gated promotion. The state model was designed to extend to both.
-6. **Per-Stop transcript cost is O(whole transcript)** (audit F13, measured 342MB RSS /
+5. **Per-Stop transcript cost is O(whole transcript)** (audit F13, measured 342MB RSS /
    ~2.8s per Stop on a 32MB transcript, re-paid every iteration). A naive tail-bound is
    UNSAFE (500 trailing sidechain lines can hide the last main-thread sentinel —
    fail-closed); the fix needs a grow-the-window scan that falls back to a full read
    when the window comes up sentinel-blind. Own engagement; don't bolt onto another fix.
    The fm() fork count (~60/Stop) is real but millisecond-scale — batch opportunistically,
-   never urgently.
-7. **Audit cuts still open** (from the 2026-08-16 max audit, verified but unfixed):
-   `set_fm`'s awk -v backslash mangling (UUID-safe today — switch to ENVIRON if free-text
-   values ever land in frontmatter); set_fm C3 append no-ops on a state file missing its
-   closing `---` (backstop re-warns every Stop); bare `paused` status vestige (no writer,
-   no resume branch — remove or wire); the "keep/!update" garble lineage in
-   repete-continue step 4 (fixed wording, watch regressions); missing tests for no-jq
-   exit-0 and stranded-summarizing cap re-application; ck `jq | grep -q` SIGPIPE
-   false-FAIL on >64KB payloads (dormant under current fixtures — switch to `jq -e`
-   predicates when touched).
+   never urgently. **Note:** v0.2.1's turn-bounded scan is still a full read — it
+   changed WHICH entry is chosen, not how much is parsed. The grow-the-window fix must
+   preserve the turn boundary, so its window has to reach back past the last user entry,
+   not just past the last assistant text.
+6. **Audit cuts still open** (from the 2026-08-16 max audit, verified but unfixed):
+   the "keep/!update" garble lineage in repete-continue step 4 (fixed wording, watch
+   regressions). The rest of that list shipped in v0.2.1: `set_fm` ENVIRON (#10),
+   fenceless-file append (#11), bare `paused` removal (#12), no-jq warn-once (#7),
+   the three missing tests (#16), and the `jq -e` assertion convention (#17 —
+   documented in the test header, applied to new assertions, migrated opportunistically).
 
 ## Operator
 

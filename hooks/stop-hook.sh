@@ -30,7 +30,22 @@ TRANSITION_FILE="$REPETE_DIR/transition.md"
 
 # Hard requirement: jq. Without it we cannot read the transcript safely, so
 # fail open (allow the stop) rather than trap the user in a loop we can't steer.
-command -v jq >/dev/null 2>&1 || exit 0
+# Silently, though, the user's loop was simply inert with zero signal (issue #7):
+# they start a loop, nothing ever iterates, and nothing says why. So warn ONCE
+# per .repete/ with a hand-built static JSON payload (emit() needs jq), gated on
+# an active loop so a finished one stays quiet. The message is a fixed literal —
+# no interpolation — so it needs no JSON escaping.
+# Failure direction: every branch here still exits 0. If the marker cannot be
+# written (read-only dir), the warning repeats — noisy, never trapping.
+if ! command -v jq >/dev/null 2>&1; then
+  NOJQ_MARKER="$REPETE_DIR/.warned-nojq"
+  if grep -qE '^active:[[:space:]]*"?true"?[[:space:]]*$' "$STATE_FILE" 2>/dev/null \
+     && [[ ! -f "$NOJQ_MARKER" ]]; then
+    : > "$NOJQ_MARKER" 2>/dev/null
+    printf '%s\n' '{"systemMessage":"repete: jq is not on PATH, so the loop engine cannot run — this loop is inert and every Stop will pass through untouched. Install jq (brew install jq / apt install jq), then /repete-continue. Delete .repete/.warned-nojq to see this warning again."}'
+  fi
+  exit 0
+fi
 
 HOOK_INPUT="$(cat)"
 
@@ -69,13 +84,21 @@ num10() { # rawvalue default
 }
 
 set_fm() { # key value  (atomic update of a key ONLY within the first frontmatter block)
-  # awk -v makes the value literal, so '&', '|', '/' in a value are safe (C2),
-  # and the f==1 guard means body lines matching "^key:" are never touched (C1).
-  # If the key is absent (hand-authored or older state file), it is APPENDED
-  # just before the closing '---' (C3) — a silent no-op here meant writes like
-  # the autonomous safety cap never persisted and the hook re-warned forever.
+  # The value travels through ENVIRON, not awk -v: -v runs the value through awk's
+  # escape processing, so a literal backslash in a value is eaten or reinterpreted
+  # (issue #10). ENVIRON hands it over byte-for-byte. Either way the value is
+  # literal to the regex engine, so '&', '|', '/' stay safe (C2), and the f==1
+  # guard means body lines matching "^key:" are never touched (C1).
+  # If the key is absent (hand-authored or older state file), it is APPENDED just
+  # before the closing '---' (C3) — a silent no-op here meant writes like the
+  # autonomous safety cap never persisted and the hook re-warned forever. A state
+  # file whose frontmatter has NO closing '---' (hand-truncated) hit exactly that
+  # no-op: f never reaches 2, so the END block appends the key instead (issue #11),
+  # closing the fence on the way out so the next read parses it. Failure direction:
+  # always write the key somewhere the fm() reader will find it, never drop it.
   local key="$1" val="$2" tmp="$STATE_FILE.tmp.$$"
-  awk -v k="$key" -v v="$val" '
+  REPETE_FM_VAL="$val" awk -v k="$key" '
+    BEGIN { v = ENVIRON["REPETE_FM_VAL"] }
     /^---[[:space:]]*$/ {
       f++
       if (f==2 && !written) { print k": " v; written=1 }
@@ -83,6 +106,11 @@ set_fm() { # key value  (atomic update of a key ONLY within the first frontmatte
     }
     f==1 && index($0, k":")==1 { print k": " v; written=1; next }
     { print }
+    END {
+      # Unterminated frontmatter (opened, never closed): append the key and the
+      # missing fence so the file becomes parseable instead of silently lossy.
+      if (!written && f==1) { print k": " v; print "---" }
+    }
   ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 }
 
@@ -169,8 +197,11 @@ ACTIVE="$(fm active)"
 # done/cancelled are terminal: they normally arrive with active:false, but a
 # hand edit or a failed teardown write can leave active:true — never re-inject
 # a finished loop on that account.
+# NOTE: bare 'paused' is deliberately NOT in this list. No writer ever set it and
+# /repete-continue had no branch for it, so it was unreachable state-machine
+# surface (issue #12). Every real pause is a paused-* value.
 case "$(fm status)" in
-  paused-checkpoint|paused-context|paused-max|paused-stale|paused|done|cancelled) exit 0 ;;
+  paused-checkpoint|paused-context|paused-max|paused-stale|done|cancelled) exit 0 ;;
 esac
 
 # ---- session isolation ---------------------------------------------------
@@ -228,14 +259,42 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # sentinel escape (fail-CLOSED, the one direction this engine must never
   # fail). Sidechain (subagent) entries are excluded: a sentinel is honored
   # only from the main thread.
+  # "Last" means the last main-thread assistant entry in THIS TURN that actually
+  # carries text — not the last entry outright. The harness appends one transcript
+  # entry per content block and per bookkeeping record, so a turn that ends
+  # "…<repete-done>goal</repete-done>" and then makes a tool call, or is merely
+  # followed by attachment/mode rows, leaves a tool_use-only assistant entry last.
+  # Taking that entry yielded text="" — the done-claim was invisible AND the
+  # mismatch branch never ran, so the loop re-injected forever with zero feedback
+  # to either the agent or the stale detector (issue #18, three Stops reproduced).
+  #
+  # The scan is bounded to the current turn: everything after the last main-thread
+  # USER entry that is not purely tool_result blocks (a tool result is role=user
+  # too, and the whole point is to see past those). Without that bound, a turn
+  # containing no text at all would re-read the PREVIOUS turn's text and re-fire a
+  # spent sentinel — re-pausing at an already-approved checkpoint, or double-
+  # counting one mismatch. No boundary found (fresh transcript) -> scan all, which
+  # is exactly the pre-existing scope.
+  # Failure direction: a turn with no text anywhere still yields "" — the loop
+  # keeps iterating within budgets, never a teardown on a stale claim.
   LAST_OUTPUT="$(jq -rRs '
-      [ split("\n")[] | fromjson? | objects
-        | select(.isSidechain != true)
-        | select(.message.role? == "assistant") ] | last
-      | (.message.content // [])
-      | if type=="array"
-        then ([ .[] | objects | select(.type=="text") | .text ] | join("\n"))
-        else tostring end
+      [ split("\n")[] | fromjson? | objects ] as $rows
+      | ( [ $rows | to_entries[]
+            | select(.value.isSidechain != true)
+            | select(.value.message.role? == "user")
+            | select( (.value.message.content // [])
+                      | if type=="array"
+                        then ([ .[] | objects | select(.type=="tool_result") ] | length) == 0
+                        else true end )
+            | .key ] | last // -1 ) as $turn_start
+      | [ $rows[($turn_start + 1):][]
+          | select(.isSidechain != true)
+          | select(.message.role? == "assistant")
+          | (.message.content // [])
+          | if type=="array"
+            then ([ .[] | objects | select(.type=="text") | .text ] | join("\n"))
+            else tostring end
+          | select(test("\\S")) ] | last // ""
     ' "$TRANSCRIPT" 2>/dev/null || echo "")"
 fi
 

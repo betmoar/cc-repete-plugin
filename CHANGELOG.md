@@ -2,6 +2,19 @@
 
 All notable changes to cc-repete are recorded here. Versions follow [semver](https://semver.org/); `.claude-plugin/plugin.json` is the single source of truth. A release is cut by pushing a `v<x.y.z>` tag — the release workflow gates `tag == plugin.json == newest CHANGELOG heading` and publishes the CHANGELOG section as the release body.
 
+## [0.2.1] — 2026-08-30
+
+### Fixed
+- **A correct `<repete-done>` claim could be invisible to the engine, and the loop would spin forever.** The hook read the sentinel from the *last assistant entry* in the transcript, but the harness appends one entry per content block plus bookkeeping rows — so a turn that claimed done and then made a tool call (or was simply followed by attachment/mode records) ended on a `tool_use`-only entry whose text is empty. The claim was neither honored nor counted as a mismatch: no teardown, no `stale_count` bump, no feedback to the agent, no yield to the human. Reproduced on a real `autonomous: true` run for three consecutive Stops with a byte-identical goal string. Sentinel extraction now reads the last *text-bearing* main-thread assistant entry of the **current turn**, bounded by the last real user message (`tool_result` rows are `role:user` too and deliberately do not start a turn) — so a spent sentinel from an earlier turn can never be re-fired at an already-approved checkpoint. Worst case is still an empty read, which keeps the loop iterating within budgets.
+- **`set_fm` mangled backslashes in frontmatter values.** Values travelled through `awk -v`, which runs them through awk's escape processing. Safe for everything written today (statuses, numbers, UUID session ids), lossy the day a free-text value carries a `\`. Values now travel via `ENVIRON`, byte-for-byte.
+- **`set_fm` silently dropped writes to a state file with no closing `---`.** The append-missing-key path keyed off the closing fence, so a hand-truncated frontmatter made every append a no-op: the autonomous safety cap never persisted and the hook re-warned on every single Stop. The key is now appended at EOF and the missing fence written after it, so the file becomes parseable again.
+- **No-`jq` degradation is no longer silent.** Missing `jq` still fails open (exit 0, Stop passes through), but an *active* loop now gets one hand-built JSON warning naming the cause and the fix, marked by `.repete/.warned-nojq` so it fires once rather than every Stop. A finished loop stays quiet.
+
+### Changed
+- **Bare `paused` removed from the status machine.** No writer ever set it and `/repete-continue` had no branch for it — unreachable surface that cost a couplings row and misled readers. Every real pause is a `paused-*` value; a test now locks it out of the hook's early-exit case.
+- **Test coverage for three load-bearing behaviors that had none:** the no-`jq` exit path (state left byte-identical, warning fires exactly once), the stranded-`summarizing` cap re-application (`paused-max` on the *same* Stop, iteration not bumped past the cap), and the `transition.md` checkpoint write (verbatim payload, prior content truncated rather than appended).
+- **`ck` assertion convention documented.** `jq -r … | grep -q …` can false-FAIL under `pipefail` when `grep -q` exits early and `jq` takes SIGPIPE — dormant on today's small fixtures, a flake waiting on any payload past the pipe buffer. The test header now specifies the `jq -e` predicate form; new assertions use it, existing ones migrate when touched.
+
 ## [0.2.0] — 2026-08-17
 
 ### Added
@@ -23,5 +36,6 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 ### Changed
 - **Docs hardened to match the code.** The couplings table gained rows (stale keys, gauntlet keys, statusline markers, sentinel spellings) and the landmine list grew (STALE_NOTE init-outside-guard, fm() first-key trap, GAUNTLET_FALLBACK mirror). Release notes, specs, README, skills, and commands were swept for drift by three review rounds; a doc-lock test block now enforces the mechanical half of the couplings table, and a golden-SHA test locks the default re-inject byte-for-byte.
 
-[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/betmoar/cc-repete-plugin/compare/v0.1.4...v0.2.0

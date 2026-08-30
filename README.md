@@ -11,7 +11,7 @@ both off by default so a bare loop stays quiet. It reuses the
 [`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.2.0** — a single evolving loop with opt-in autonomous mode, opt-in project-local
+This is **v0.2.1** — a single evolving loop with opt-in autonomous mode, opt-in project-local
 lessons, mismatch-feedback on done-claims, and opt-in gauntlet (builder/critic) rounds.
 Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
 same state model.
@@ -109,6 +109,7 @@ operational and design judgment, so the commands stay terse:
 ├── handoff.md        # in-flight snapshot written at a context checkpoint, read on rehydrate
 ├── parts.md          # gauntlet only: part · judgeable criterion · status
 ├── critique.md       # gauntlet only: last critic verdict (first line = WINNER)
+├── .warned-nojq      # marker: the "jq is missing, this loop is inert" warning already fired
 └── lessons/          # one card per mistake/insight; retrieved into future loops (only if lessons_enabled)
 ```
 
@@ -161,7 +162,8 @@ a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled
 
 - `jq` and `perl` on `PATH` are recommended but **fail-open optional** (`perl` ships with
   macOS; `jq` ships with recent macOS and most Linux distros). Without `jq` the hook
-  fails open — it will not trap you in a loop it can't steer. Without `perl` the loop
+  fails open — it will not trap you in a loop it can't steer — and warns you once per
+  loop that it is inert, so a silently non-iterating loop isn't a mystery. Without `perl` the loop
   still runs; only the UTF-8-BOM strip degrades (a BOM'd state file reads as inactive,
   same as before that hardening) and sentinel probes fall back to permissive reads.
 - The `remember` plugin is recommended (memory + `SessionStart` rehydrate) but not required.
