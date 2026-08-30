@@ -162,8 +162,11 @@ a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled
 
 - `jq` and `perl` on `PATH` are recommended but **fail-open optional** (`perl` ships with
   macOS; `jq` ships with recent macOS and most Linux distros). Without `jq` the hook
-  fails open — it will not trap you in a loop it can't steer — and warns you once per
-  loop that it is inert, so a silently non-iterating loop isn't a mystery. Without `perl` the loop
+  fails open — it will not trap you in a loop it can't steer — and warns you that the loop
+  is inert, so a silently non-iterating loop isn't a mystery. That warning fires once per
+  `.repete/` directory: it drops a `.warned-nojq` marker and stays quiet while that file
+  exists, including across later loops in the same project. Delete the marker to hear it
+  again. Without `perl` the loop
   still runs; only the UTF-8-BOM strip degrades (a BOM'd state file reads as inactive,
   same as before that hardening) and sentinel probes fall back to permissive reads.
 - The `remember` plugin is recommended (memory + `SessionStart` rehydrate) but not required.

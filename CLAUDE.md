@@ -188,7 +188,10 @@ If you add a check, decide its failure direction first and write it in a comment
   program walks many, so it has strictly more rows to trip over.
 - **The no-jq warning is hand-built JSON** (issue #7) — `emit()` needs jq, so that
   branch `printf`s a fixed literal with no interpolation (hence no escaping concerns)
-  and marks `.repete/.warned-nojq` so it fires once. It is gated on `active: true` so
+  and marks `.repete/.warned-nojq` so it fires once per `.repete/` — nothing clears that
+  marker (`/repete-cancel` leaves state by design, `/repete` archives rather than deletes),
+  so it stays quiet across later loops in the project until the user deletes it; the
+  message names the path for exactly that reason. It is gated on `active: true` so
   a finished loop stays quiet, and every branch still exits 0. The gate is an inline
   `awk` scoped to the first frontmatter block, not a bare `grep`: `fm()` is defined
   further down and belongs to the jq-era helpers, but a plain grep also matches a BODY
