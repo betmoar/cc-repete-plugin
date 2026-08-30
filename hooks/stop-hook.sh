@@ -39,8 +39,14 @@ TRANSITION_FILE="$REPETE_DIR/transition.md"
 # written (read-only dir), the warning repeats — noisy, never trapping.
 if ! command -v jq >/dev/null 2>&1; then
   NOJQ_MARKER="$REPETE_DIR/.warned-nojq"
-  if grep -qE '^active:[[:space:]]*"?true"?[[:space:]]*$' "$STATE_FILE" 2>/dev/null \
-     && [[ ! -f "$NOJQ_MARKER" ]]; then
+  # Scope the active-check to the FIRST frontmatter block, mirroring fm()/C1: a
+  # bare grep also matches a body line like "active: true" (loop prose quoting the
+  # schema), which would warn about a finished loop. awk, because the real reader
+  # is not available yet — fm() is defined below and needs the jq-era helpers.
+  NOJQ_ACTIVE="$(awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next}
+                      f==1 && /^active:[[:space:]]*"?true"?[[:space:]]*\r?$/{print "y"; exit}
+                      f>=2{exit}' "$STATE_FILE" 2>/dev/null)"
+  if [[ "$NOJQ_ACTIVE" == "y" && ! -f "$NOJQ_MARKER" ]]; then
     : > "$NOJQ_MARKER" 2>/dev/null
     printf '%s\n' '{"systemMessage":"repete: jq is not on PATH, so the loop engine cannot run — this loop is inert and every Stop will pass through untouched. Install jq (brew install jq / apt install jq), then /repete-continue. Delete .repete/.warned-nojq to see this warning again."}'
   fi
@@ -269,12 +275,21 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # to either the agent or the stale detector (issue #18, three Stops reproduced).
   #
   # The scan is bounded to the current turn: everything after the last main-thread
-  # USER entry that is not purely tool_result blocks (a tool result is role=user
-  # too, and the whole point is to see past those). Without that bound, a turn
-  # containing no text at all would re-read the PREVIOUS turn's text and re-fire a
-  # spent sentinel — re-pausing at an already-approved checkpoint, or double-
-  # counting one mismatch. No boundary found (fresh transcript) -> scan all, which
-  # is exactly the pre-existing scope.
+  # USER entry that CARRIES A NON-tool_result BLOCK. A tool result is role=user too
+  # and the whole point is to see past those, but the test is "has something other
+  # than tool_result", not "has no tool_result at all" — the observed shapes are
+  # `tool_result`, plain `string`, `text`, and `image+text`, and a hypothetical row
+  # mixing a tool_result WITH real user text is a genuine new instruction from the
+  # human, so it must open a turn. Without any bound, a turn containing no text at
+  # all would re-read the PREVIOUS turn's text and re-fire a spent sentinel —
+  # re-pausing at an already-approved checkpoint, or double-counting one mismatch.
+  # No boundary found (fresh transcript) -> $turn_start is -1 and the slice starts
+  # at 0, i.e. scan everything: exactly the pre-existing scope.
+  # `.text | strings` drops a non-string .text instead of letting join() raise —
+  # a jq runtime error aborts the WHOLE program, so one malformed block would blank
+  # the entire scan and blind sentinel detection (fail-CLOSED, the forbidden
+  # direction; the old `| last` code only ever touched one entry, so this program
+  # has strictly more rows to trip over).
   # Failure direction: a turn with no text anywhere still yields "" — the loop
   # keeps iterating within budgets, never a teardown on a stale claim.
   LAST_OUTPUT="$(jq -rRs '
@@ -284,7 +299,7 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
             | select(.value.message.role? == "user")
             | select( (.value.message.content // [])
                       | if type=="array"
-                        then ([ .[] | objects | select(.type=="tool_result") ] | length) == 0
+                        then ([ .[] | objects | select(.type != "tool_result") ] | length) > 0
                         else true end )
             | .key ] | last // -1 ) as $turn_start
       | [ $rows[($turn_start + 1):][]
@@ -292,7 +307,7 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
           | select(.message.role? == "assistant")
           | (.message.content // [])
           | if type=="array"
-            then ([ .[] | objects | select(.type=="text") | .text ] | join("\n"))
+            then ([ .[] | objects | select(.type=="text") | .text | strings ] | join("\n"))
             else tostring end
           | select(test("\\S")) ] | last // ""
     ' "$TRANSCRIPT" 2>/dev/null || echo "")"

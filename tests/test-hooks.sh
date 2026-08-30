@@ -836,6 +836,67 @@ mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(uresult)" "$(at
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "#18: tool_result is not a turn boundary" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
 
+echo "== #18: a malformed text block does not blank the whole scan (fail-closed guard) =="
+# A non-string .text made join() raise, and a jq runtime error aborts the ENTIRE
+# program -> LAST_OUTPUT="" -> every sentinel invisible. The old `| last` code
+# only ever touched one entry; this program walks many, so it has strictly more
+# rows to trip over. `.text | strings` drops the bad block instead.
+scaffold ""
+mkrows '{"message":{"role":"assistant","content":[{"type":"text","text":{"nested":"object"}}]}}' \
+       "$(atext '<repete-done>all tests pass</repete-done>')"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: malformed text block skipped, later sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+# ...and when the malformed block is in the LAST entry, the scan must fall back to
+# the previous text entry rather than returning nothing at all.
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" \
+       '{"message":{"role":"assistant","content":[{"type":"text","text":42}]}}'
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: malformed LAST block does not blind the scan" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: a user row mixing tool_result WITH real text DOES open a turn =="
+# Observed user-row shapes across 75 real transcripts: tool_result / string / text /
+# image+text. A row carrying a tool_result AND human text is a genuine new
+# instruction, so it must bound the turn — otherwise a sentinel from before it
+# leaks into this turn and re-fires.
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" \
+       '{"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"},{"type":"text","text":"actually, do this instead"}]}}' \
+       "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: mixed user row bounds the turn (spent claim not re-fired)" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: an image+text user row opens a turn =="
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" \
+       '{"message":{"role":"user","content":[{"type":"image","source":{}},{"type":"text","text":"look at this"}]}}' \
+       "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: image+text user row bounds the turn" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: a SIDECHAIN user row must not become the turn boundary =="
+# A subagent's prompt is role:user + isSidechain. If it bounded the turn, every
+# main-thread sentinel emitted before a subagent launch would go invisible.
+scaffold ""
+mkrows "$(uprompt 'real prompt')" \
+       "$(atext '<repete-done>all tests pass</repete-done>')" \
+       '{"isSidechain":true,"message":{"role":"user","content":"subagent prompt"}}' \
+       "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: sidechain user row is not a boundary" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: no user row at all -> scan everything (pre-existing scope) =="
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: turn_start=-1 slices from 0, sentinel found" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== #18: whitespace-only final text falls back to the prior text entry =="
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atext '   ')"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#18: whitespace-only entry skipped" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
 echo "== #18: sidechain text still ignored under the new scan =="
 scaffold ""
 mkrows "$(atext 'main thread work')" \
@@ -902,6 +963,16 @@ NOJQ3="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\
   | env PATH="$NOJQBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
 ck "#7: inactive loop + no jq stays silent" '[ -z "$NOJQ3" ]'
 ck "#7: inactive loop writes no marker"     '[ ! -f "$TMP/.repete/.warned-nojq" ]'
+# The active-check must read FRONTMATTER only (C1): a body line quoting the schema
+# is prose, not state. A bare grep matched it and warned about a finished loop.
+scaffold ""
+setstate active false
+setstate status 'done'   # quoted: bare `done` reads as the loop keyword (SC1010)
+printf 'the schema line looks like this:\nactive: true\n' >> "$TMP/.repete/loop.local.md"
+NOJQ4="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$NOJQBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
+ck "#7: body decoy 'active: true' does not trigger the warning" '[ -z "$NOJQ4" ]'
+ck "#7: body decoy writes no marker"                            '[ ! -f "$TMP/.repete/.warned-nojq" ]'
 
 echo "== #16: stranded summarizing re-applies the cap on the SAME Stop =="
 # status summarizing + no longer over budget + iteration already at the cap:

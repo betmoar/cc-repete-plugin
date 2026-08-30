@@ -167,14 +167,25 @@ If you add a check, decide its failure direction first and write it in a comment
   that, blanking the claim: no teardown, and the mismatch branch never ran either, so
   the loop re-injected forever with zero feedback to agent or stale detector. The scan
   is bounded to the current turn (everything after the last main-thread `user` entry
-  that is not purely `tool_result` blocks — tool results are `role:user` too and must
+  that carries a NON-`tool_result` block — tool results are `role:user` too and must
   not count as a boundary); without that bound a text-less turn would re-fire a spent
   sentinel and re-pause at an already-approved checkpoint. Both directions are tested.
+  The boundary test is "has a non-tool_result block", NOT "has no tool_result": the
+  observed user-row shapes are `tool_result` / `string` / `text` / `image+text`
+  (18801/1939/207/23 across 75 real transcripts), and a row mixing a tool_result with
+  real human text is a new instruction that must open a turn. `.text | strings` drops a
+  non-string `.text` rather than letting `join()` raise — **a jq runtime error aborts
+  the whole program**, so one malformed block would blank the entire scan and blind
+  sentinel detection (fail-closed). The old `| last` touched exactly one entry; this
+  program walks many, so it has strictly more rows to trip over.
 - **The no-jq warning is hand-built JSON** (issue #7) — `emit()` needs jq, so that
   branch `printf`s a fixed literal with no interpolation (hence no escaping concerns)
-  and marks `.repete/.warned-nojq` so it fires once. It is gated on `active: true`
-  (grep, not `fm()` — the frontmatter reader runs later) so a finished loop stays
-  quiet, and every branch still exits 0.
+  and marks `.repete/.warned-nojq` so it fires once. It is gated on `active: true` so
+  a finished loop stays quiet, and every branch still exits 0. The gate is an inline
+  `awk` scoped to the first frontmatter block, not a bare `grep`: `fm()` is defined
+  further down and belongs to the jq-era helpers, but a plain grep also matches a BODY
+  line like `active: true` (loop prose quoting the schema) and warned about finished
+  loops — the same C1 trap `set_fm` guards against.
 - **Session isolation stamps on first sight** because commands can't reliably know the
   session id at setup. Every resume path in `/repete-continue` blanks `session_id` —
   a stale id makes the hook silently ignore the resumed session (looks like a dead loop).
