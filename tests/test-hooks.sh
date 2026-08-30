@@ -927,6 +927,15 @@ ck "#11: backstop cap persisted despite missing fence" 'grep -qE "^max_iteration
 ck "#11: fence repaired so the block is parseable"     '[ "$(grep -cE "^---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 2 ]'
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "#11: second Stop does not re-warn" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"safety max_iterations\")" >/dev/null'
+# The repair appends at EOF, which is the only place it CAN append: with no closing
+# fence, awk's f==1 covers the rest of the file and nothing distinguishes a trailing
+# key from body prose. Lock that it is non-destructive — the body text must still be
+# in the file afterwards. (It is not INJECTED, because PAYLOAD_BODY reads after the
+# second fence and a fenceless file never had one — same on the pre-v0.2.1 hook.
+# Repairing a hand-broken file's frontmatter/body split is out of scope; bounding
+# future reads is the point.)
+ck "#11: repair is non-destructive — body text survives in the file" \
+   'grep -q "do the slice" "$TMP/.repete/loop.local.md"'
 
 echo "== #12: bare 'paused' is not an early-exit status (dead vestige removed) =="
 scaffold ""

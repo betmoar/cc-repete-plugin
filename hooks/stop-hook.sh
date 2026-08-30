@@ -115,6 +115,13 @@ set_fm() { # key value  (atomic update of a key ONLY within the first frontmatte
     END {
       # Unterminated frontmatter (opened, never closed): append the key and the
       # missing fence so the file becomes parseable instead of silently lossy.
+      # EOF is the only place this CAN go: with no closing fence, f==1 covers the
+      # rest of the file and nothing distinguishes a trailing key from body prose.
+      # So the fence lands after the body, which stays byte-intact (locked by test)
+      # but remains outside PAYLOAD_BODY — exactly as it already was before this
+      # repair existed, since that extraction reads after the SECOND fence and a
+      # fenceless file never had one. Guessing where the user meant the split to be
+      # would be worse: it can silently promote body prose into live frontmatter.
       if (!written && f==1) { print k": " v; print "---" }
     }
   ' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"

@@ -106,7 +106,7 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the test coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md" |
 | Sentinel strings | Hook + README always; `<repete-done>` also protocol + running skill + /repete; `<repete-checkpoint>` also running skill + /repete-continue (NOT protocol.md — the frozen core stays quiet; the rule rides RULES_EXTRA) | tests: doc-lock block |
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
-| Transcript scan shape (`$turn_start`, text-bearing pick) | The #18 test block (both directions: sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) | tests: `#18` blocks |
+| Transcript scan shape (`$turn_start`, text-bearing pick) | The #18 test block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, `tool_result`+text mixed, sidechain | tests: `#18` blocks |
 | `.repete/.warned-nojq` marker path | Hook no-jq branch + the warning text that names it for deletion | tests: `#7` blocks |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
 | `tests/run-all.sh` checks | `.github/workflows/ci.yml` (and vice versa) | not enforced — keep in sync by hand |
@@ -139,6 +139,14 @@ If you add a check, decide its failure direction first and write it in a comment
   path (issue #11): a frontmatter that was opened and never closed used to make the
   C3 append a silent no-op, so the backstop cap never persisted and the hook re-warned
   every Stop; now the key is appended at EOF and the closing `---` is written after it.
+  EOF is the only possible landing spot — without a closing fence, `f==1` covers the
+  whole remainder and no rule distinguishes a trailing key from body prose. So on a
+  fenceless file the body ends up *above* the repaired fence: byte-intact (locked by
+  test) but outside `PAYLOAD_BODY`, which is where it already was, since that
+  extraction reads after the SECOND fence and a fenceless file never had one. Both the
+  pre- and post-v0.2.1 hooks inject zero body lines there. Do not "improve" this by
+  guessing where the split belongs: a heuristic that promotes body prose into live
+  frontmatter is the strictly worse failure.
 - **Iteration semantics:** `iteration` counts completed work turns; the cap check is
   `>=` *before* the bump, so `max_iterations: 3` = exactly 3 work turns. The handoff
   (`summarizing`) turn is free — no bump.
