@@ -11,12 +11,13 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 - **Trailing whitespace after a numeric frontmatter value no longer discards it.** `max_iterations: 5␠` (an invisible hand-edit artifact) read as malformed → default 0 → the backstop stamped 25 over the user's cap of 5; the statusline likewise rendered a capped loop as uncapped. Both parsers now strip trailing whitespace outside quotes.
 - **Lesson-card `hits` values over 18 digits wrapped negative in the catalog** (rank inverted, `hits:-25377…` rendered); they now fall to the same overflow default as every other numeric read.
 - **Release notes truncated at any CHANGELOG body line starting with `[`.** `extractSection` stopped at any `[`-leading line, not just the link-reference block; a `[MEASURED: …]`-style line cut the published notes silently. The stop now matches the reference shape (`[label]: url`) only.
+- **A BOM'd state file also froze the iteration counter while the hook kept blocking.** Reads were made BOM-safe earlier, but `set_fm` still read the raw file: the BOM'd opening fence mis-scoped its awk, every write landed in an EOF pseudo-block that reads never saw — writes "succeeded", the counter never advanced, and `max_iterations` was unreachable while every Stop was blocked. The hook now de-BOMs the state file on disk once at startup, so reads and writes agree; if that rewrite fails, `set_fm` fails with it and the fail-open bails above release the Stop.
 
 ### Added
 - **The release gate has tests** (`tests/test-release-gate.mjs`, run via `node --test` in run-all.sh and CI) — it used to be exercised for the first time on a tag push, the worst possible moment.
 - **`tests/regen-golden.sh`** regenerates the golden re-inject SHA mechanically after a deliberate default-re-inject change — no more hand-reconstructing the fixture pipeline from the test source.
 - **`marketplace.json` is validated by run-all.sh and CI**, not just at release time — it serves `/plugin marketplace add` from repo HEAD, so a malformed edit used to break installs while CI stayed green.
-- Unwritable-state, BOM-body, neutral-turn, trailing-space, and overflow-hits regressions are all locked by new test blocks (hook suite 237 → 256 assertions); CLAUDE.md gained couplings rows for the release trio, the golden SHA, and the marketplace manifest.
+- Unwritable-state, BOM-body, BOM-write, neutral-turn, trailing-space, and overflow-hits regressions are all locked by new test blocks (hook suite 237 → 260 assertions); the release workflow runs the release-gate tests too (three-way run-all/ci/release sync); CLAUDE.md gained couplings rows for the release trio, the golden SHA, and the marketplace manifest.
 
 ## [0.2.1] — 2026-08-30
 

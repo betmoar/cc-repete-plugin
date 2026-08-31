@@ -1051,6 +1051,21 @@ mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "A-F02: BOM body rides the re-inject (not just decision=block)" 'printf "%s" "$OUT" | jq -e ".reason | test(\"do the slice\")" >/dev/null'
 
+echo "== A-BOM/set_fm: writes on a BOM'd file persist in the FIRST frontmatter block (de-BOM) =="
+# Pre-fix, set_fm read the raw file: the BOM'd opening fence mis-scoped its awk,
+# every write landed in an EOF pseudo-block fm() never read back, the iteration
+# counter froze, and the hook blocked every Stop with the cap unreachable
+# (Copilot review on PR #20 — the F01 trap through a different door).
+scaffold ""
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "BOM/set_fm: file de-BOM'd on disk (starts with the fence)" '[ "$(head -c 3 "$TMP/.repete/loop.local.md")" = "---" ]'
+ck "BOM/set_fm: iteration bump lands in the FIRST frontmatter block" 'awk "/^---/{f++} f==1 && /^iteration: 2/{found=1} END{exit !found}" "$TMP/.repete/loop.local.md"'
+ck "BOM/set_fm: no EOF pseudo-block (exactly two fences)" '[ "$(grep -cE "^---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 2 ]'
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "BOM/set_fm: counter advances on the next Stop (3, not frozen)" 'awk "/^---/{f++} f==1 && /^iteration: 3/{found=1} END{exit !found}" "$TMP/.repete/loop.local.md"'
+
 echo "== A-F03: a sentinel in an EARLIER same-turn text entry does not reset the stale counter =="
 scaffold ""
 setstate stale_count 2

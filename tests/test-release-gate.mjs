@@ -56,6 +56,23 @@ test("F07: a body line starting with '[' does not truncate the notes; the link-r
 	rmSync(root, { recursive: true, force: true });
 });
 
+test("link-reference block directly after the tagged section stops the notes (no later heading to hide behind)", () => {
+	// GOOD_CHANGELOG's next version heading stops extraction before the link-ref
+	// block is ever reached, so it cannot lock the F07 stop condition on its own
+	// (Copilot review on PR #20). This fixture has NO later heading: the link-ref
+	// alternative in the stop regex is the only thing standing between the notes
+	// and the reference block.
+	const root = fixture({
+		changelog: `# Changelog\n\n## [0.3.0] — 2026-09-01\n\n- only note line\n[MEASURED: x] bracket-leading body line\n\n[Unreleased]: https://example.com/compare/v0.3.0...HEAD\n[0.3.0]: https://example.com/compare/v0.2.1...v0.3.0\n`,
+	});
+	const { problems, notes } = gate(root, "v0.3.0");
+	assert.deepEqual(problems, []);
+	assert.ok(notes.includes("only note line"));
+	assert.ok(notes.includes("[MEASURED: x]"), "bracket body line survives");
+	assert.ok(!notes.includes("[Unreleased]:"), "link-reference block must stop the extraction");
+	rmSync(root, { recursive: true, force: true });
+});
+
 test("malformed tag is rejected with guidance", () => {
 	const root = fixture({ changelog: GOOD_CHANGELOG });
 	const { problems } = gate(root, "0.3.0");

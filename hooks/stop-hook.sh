@@ -73,6 +73,25 @@ if command -v perl >/dev/null 2>&1; then
   CONTENT="$(printf '%s' "$FM_RAW" | perl -pe 's/^\xEF\xBB\xBF// if $. == 1' 2>/dev/null)"
 fi
 [[ -n "$CONTENT" ]] || CONTENT="$FM_RAW"
+# De-BOM the state file ON DISK, once, when a BOM was actually stripped above
+# (CONTENT differs from the raw read only in that case). Reads were made
+# BOM-safe in v0.2.0/v0.2.2, but set_fm still reads the RAW file: a BOM'd
+# opening fence mis-scopes its awk (C1) so every write lands in an EOF
+# pseudo-block that the BOM-stripped fm() never reads back — writes "succeed"
+# while reads stay frozen, the iteration counter never advances, and the hook
+# blocks every Stop with max_iterations unreachable (the F01 fail-closed trap
+# through a different door; Copilot review on PR #20, reproduced). Rewriting
+# the file BOM-less makes reads and writes agree again. Failure direction: if
+# this rewrite fails (read-only dir), the file stays BOM'd and set_fm fails
+# right along with it — the F01 bail-open paths then let the Stop through.
+# Trailing-newline runs are normalized to one (command-substitution
+# round-trip); every other body byte is untouched.
+if [[ "$CONTENT" != "$FM_RAW" ]]; then
+  DEBOM_TMP="$STATE_FILE.tmp.$$"
+  if printf '%s\n' "$CONTENT" > "$DEBOM_TMP" 2>/dev/null; then
+    mv "$DEBOM_TMP" "$STATE_FILE" 2>/dev/null || rm -f "$DEBOM_TMP" 2>/dev/null
+  fi
+fi
 # CONTENT is the BOM-stripped whole file; BOTH the frontmatter reader and the
 # body extraction below must read from it. Reading the body from the raw file
 # again re-introduces the BOM bug for the body only: the BOM glues to the
