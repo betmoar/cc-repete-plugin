@@ -16,7 +16,7 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 - **The release gate has tests** (`tests/test-release-gate.mjs`, run via `node --test` in run-all.sh and CI) — it used to be exercised for the first time on a tag push, the worst possible moment.
 - **`tests/regen-golden.sh`** regenerates the golden re-inject SHA mechanically after a deliberate default-re-inject change — no more hand-reconstructing the fixture pipeline from the test source.
 - **`marketplace.json` is validated by run-all.sh and CI**, not just at release time — it serves `/plugin marketplace add` from repo HEAD, so a malformed edit used to break installs while CI stayed green.
-- Unwritable-state, BOM-body, neutral-turn, trailing-space, and overflow-hits regressions are all locked by new test blocks (hook suite 237 → 253 assertions); CLAUDE.md gained couplings rows for the release trio, the golden SHA, and the marketplace manifest.
+- Unwritable-state, BOM-body, neutral-turn, trailing-space, and overflow-hits regressions are all locked by new test blocks (hook suite 237 → 256 assertions); CLAUDE.md gained couplings rows for the release trio, the golden SHA, and the marketplace manifest.
 
 ## [0.2.1] — 2026-08-30
 
