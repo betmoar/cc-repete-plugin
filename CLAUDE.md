@@ -316,22 +316,21 @@ If you add a check, decide its failure direction first and write it in a comment
    degrades to "scan everything" (the pre-v0.2.1 scope, fail-open) — but watch Claude
    Code release notes, and re-check `hooks/stop-hook.sh`'s `$turn_start` if the shape
    of user/tool_result entries moves.
-3. **`context_budget_lines` counts transcript lines, not tokens** — documented as a
+3. **`context_budget_lines` counts transcript lines, not tokens** (issue #15) — documented as a
    loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
-4. **v2/v3 roadmap** (README): phased missions; global lesson store with
+4. **v2/v3 roadmap** (README, issues #13/#14): phased missions; global lesson store with
    recurrence-gated promotion. The state model was designed to extend to both.
 5. **~~Per-Stop transcript cost is O(whole transcript)~~ — SHIPPED (issue #9).** The scan
-   now grows a `tail -n` window until it contains a turn boundary; see the landmine on the
-   boundary predicate. Measured end-to-end, old vs new, same machine: 33.6MB/13.7k lines
-   0.50s → 0.21s; 37.9MB/100k lines 0.85s → 0.14s; 27.1MB/1.7k fat lines 0.39s → 0.40s
-   (fits the initial window, so it takes the direct-read fast path and pays one extra
-   line count — an accepted regression on the one shape with nothing to window);
-   20k-line two-growth shape 0.29s → 0.34s (bounded by the half-file rule below; it was
-   0.50s / +77% before that bound). Note the issue's cited
-   ~2.8s never reproduced here; RSS did. Residue: the `fm()` fork count (~60/Stop) is real
-   but millisecond-scale — batch opportunistically, never urgently.
-6. **Sentinel visibility across a multi-entry turn — open design question** (2026-08-31
-   audit F03 residue): a done-claim in an EARLIER text entry of the turn is neutral
+   now grows a `tail -n` window until it contains a turn boundary; see the three window
+   landmines (boundary predicate, `grep -c` not `wc -l`, cumulative growth bound).
+   Measured end-to-end, old vs new, same machine: 33.6MB/13.7k lines 0.50s → 0.21s;
+   37.9MB/100k lines 0.85s → 0.14s; 27.1MB/1.7k fat lines 0.39s → 0.40s (fits the initial
+   window, takes the direct-read fast path, pays one extra line count — accepted); 40k
+   deep-boundary 0.39s → 0.43s; 256k deep-boundary 2.16s → 2.33s. The issue's cited ~2.8s
+   never reproduced here; RSS did. Residue: the `fm()` fork count (~60/Stop) is real but
+   millisecond-scale — batch opportunistically, never urgently.
+6. **Sentinel visibility across a multi-entry turn — open design question** (issue #24;
+   2026-08-31 audit F03 residue): a done-claim in an EARLIER text entry of the turn is neutral
    since v0.2.2 (no teardown, no count, no longer a counter reset), but it is still
    invisible — a correct claim followed by a wrap-up sentence burns iterations to the
    budget with zero feedback. The full fix is joining ALL the turn's text entries for
@@ -345,7 +344,16 @@ If you add a check, decide its failure direction first and write it in a comment
    fenceless-file append (#11), bare `paused` removal (#12), no-jq warn-once (#7),
    the three missing tests (#16), and the `jq -e` assertion convention (#17 —
    documented in the test header, applied to new assertions, migrated opportunistically).
-
+8. **~~A failed `set_fm` write announces success it never persisted~~ — SHIPPED v0.2.3
+   (issue #21).** `set_fm_or_warn` guards every write whose message promises persistence.
+   RESIDUE, still open: `set_fm` orphans its `.tmp.$$` when `mv` fails — no `|| rm -f`,
+   unlike the de-BOM block right above it. Cosmetic next to the announce bug, but it
+   litters `.repete/` on a full disk, which is exactly when the user is already in trouble.
+9. **~~Release notes truncate at a `[LABEL]: text` body line~~ — SHIPPED v0.2.3 (issue #22).**
+   The stop pattern now requires the URL shape.
+10. **~~`docs/spec/*` is outside the couplings table~~ — SHIPPED v0.2.3 (issue #23).**
+   Couplings row added, safe-change step 4 names it, and each spec file declares itself a
+   design record that may lag the code.
 ## Operator
 
 @OPERATOR.md — it is this session's operating charter. Local and gitignored: in a fresh
