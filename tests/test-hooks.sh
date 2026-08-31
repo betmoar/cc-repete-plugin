@@ -1062,7 +1062,13 @@ mktx "did some work"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "BOM/set_fm: file de-BOM'd on disk (starts with the fence)" '[ "$(head -c 3 "$TMP/.repete/loop.local.md")" = "---" ]'
 ck "BOM/set_fm: iteration bump lands in the FIRST frontmatter block" 'awk "/^---/{f++} f==1 && /^iteration: 2/{found=1} END{exit !found}" "$TMP/.repete/loop.local.md"'
-ck "BOM/set_fm: no EOF pseudo-block (exactly two fences)" '[ "$(grep -cE "^---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 2 ]'
+# Counts fence lines over the RAW bytes, optional BOM included: a plain
+# ^--- count is NOT discriminating — pre-fix the file carries a BOM'd
+# opening fence (invisible to ^---) plus the extra one the EOF pseudo-block
+# appends, so it also totals 2. Anchoring the optional BOM makes the third
+# fence visible, so this fails without the de-BOM fix instead of passing
+# for the wrong reason.
+ck "BOM/set_fm: no EOF pseudo-block (exactly two fences)" '[ "$(grep -cE "^($(printf "\xEF\xBB\xBF"))?---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 2 ]'
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "BOM/set_fm: counter advances on the next Stop (3, not frozen)" 'awk "/^---/{f++} f==1 && /^iteration: 3/{found=1} END{exit !found}" "$TMP/.repete/loop.local.md"'
 
