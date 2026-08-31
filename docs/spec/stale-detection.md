@@ -71,6 +71,14 @@ if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]
 fi
 ```
 
+> **Refined in v0.2.2** (2026-08-31 audit F03): "no done-sentinel this turn" means no
+> `<repete-done>` anywhere in the turn's text. A turn whose sentinel sits in an
+> EARLIER text entry (claim, then a tool call or wrap-up text) is NEUTRAL — not
+> honored, not counted (the last-text-entry-wins rule above stands), and no longer a
+> reset either: pre-fix, an agent that habitually appended text after its claims
+> could never trip `paused-stale`. Only a genuinely sentinel-free turn resets. Live
+> logic: the `TURN_HAS_DONE` probe in `hooks/stop-hook.sh`'s done-check else-branch.
+
 `STALE_NOTE` (when set) is prepended to the re-inject assembly after the body and
 before the lesson catalog — it is per-turn feedback, not durable state, and carries
 no lesson-card bodies (metadata-only rule untouched).

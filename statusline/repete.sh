@@ -44,6 +44,10 @@ fmv() { # key
       /^---[[:space:]]*$/ { f++; next }
       f==1 && index($0, k":")==1 {
         sub("^" k ":[[:space:]]*", ""); gsub(/\r/, "")
+        # trailing-space strip BEFORE the quote strip — parity with the hook
+        # fm(): "max_iterations: 5 " must render rp[i/5], not silently
+        # uncapped (2026-08-31 audit F04); whitespace INSIDE quotes is content.
+        sub(/[[:space:]]+$/, "")
         sub(/^"/, ""); sub(/"$/, "")
         print; exit
       }
@@ -55,6 +59,10 @@ fmv() { # key
       /^---[[:space:]]*$/ { f++; next }
       f==1 && index($0, k":")==1 {
         sub("^" k ":[[:space:]]*", ""); gsub(/\r/, "")
+        # trailing-space strip BEFORE the quote strip — parity with the hook
+        # fm(): "max_iterations: 5 " must render rp[i/5], not silently
+        # uncapped (2026-08-31 audit F04); whitespace INSIDE quotes is content.
+        sub(/[[:space:]]+$/, "")
         sub(/^"/, ""); sub(/"$/, "")
         print; exit
       }

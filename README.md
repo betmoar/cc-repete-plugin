@@ -11,7 +11,7 @@ both off by default so a bare loop stays quiet. It reuses the
 [`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.2.1** — a single evolving loop with opt-in autonomous mode, opt-in project-local
+This is **v0.2.2** — a single evolving loop with opt-in autonomous mode, opt-in project-local
 lessons, mismatch-feedback on done-claims, and opt-in gauntlet (builder/critic) rounds.
 Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
 same state model.
@@ -170,6 +170,9 @@ a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled
   still runs; only the UTF-8-BOM strip degrades (a BOM'd state file reads as inactive,
   same as before that hardening) and sentinel probes fall back to permissive reads.
 - The `remember` plugin is recommended (memory + `SessionStart` rehydrate) but not required.
+- If `.repete/` becomes unwritable mid-run (disk full, permissions), the hook fails open:
+  the Stop is allowed through with a warning naming the write problem, rather than
+  re-injecting a loop whose progress can no longer be tracked.
 
 ## Install
 

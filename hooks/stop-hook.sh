@@ -68,13 +68,61 @@ HOOK_INPUT="$(cat)"
 # limitation) — a NUL-corrupted state file reads as inactive, the same
 # fail-open direction as the BOM/CRLF cases; pathological, accepted.
 FM_RAW="$(cat "$STATE_FILE" 2>/dev/null)"
-FM=""
+CONTENT=""
+# The assignment is wrapped in `if` so a FAILING perl is caught: under pipefail
+# the command substitution inherits the pipeline's status, so a perl that is
+# OOM-killed or crashes mid-stream fails here even though it already flushed
+# bytes to stdout. Without this, a truncated-but-non-empty read passes the
+# -n guard below, and the de-BOM rewrite then commits that fragment to disk —
+# a 1.1MB state file was reproduced collapsing to 24KB, taking the payload
+# body with it. Failure direction: any non-zero perl status discards CONTENT
+# and falls back to the RAW read (a BOM'd file degrades to inactive, the
+# pre-F7 direction) — never a partial write over the user's state.
 if command -v perl >/dev/null 2>&1; then
-  FM="$(printf '%s' "$FM_RAW" | perl -pe 's/^\xEF\xBB\xBF// if $. == 1' 2>/dev/null)"
+  if ! CONTENT="$(printf '%s' "$FM_RAW" | perl -pe 's/^\xEF\xBB\xBF// if $. == 1' 2>/dev/null)"; then
+    CONTENT=""
+  fi
 fi
-[[ -n "$FM" ]] || FM="$FM_RAW"
-FM="$(printf '%s\n' "$FM" | awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' | tr -d '\r')"
-fm() { printf '%s\n' "$FM" | grep "^$1:" | head -1 | sed "s/^$1:[[:space:]]*//" | sed 's/^"\(.*\)"$/\1/'; }
+[[ -n "$CONTENT" ]] || CONTENT="$FM_RAW"
+# De-BOM the state file ON DISK, once, when a BOM was actually stripped above
+# (CONTENT differs from the raw read only in that case). Reads were made
+# BOM-safe in v0.2.0/v0.2.2, but set_fm still reads the RAW file: a BOM'd
+# opening fence mis-scopes its awk (C1) so every write lands in an EOF
+# pseudo-block that the BOM-stripped fm() never reads back — writes "succeed"
+# while reads stay frozen, the iteration counter never advances, and the hook
+# blocks every Stop with max_iterations unreachable (the F01 fail-closed trap
+# through a different door; Copilot review on PR #20, reproduced). Rewriting
+# the file BOM-less makes reads and writes agree again. Failure direction: if
+# this rewrite fails (read-only dir), the file stays BOM'd and set_fm fails
+# right along with it — the F01 bail-open paths then let the Stop through.
+# Trailing-newline runs are normalized to one (command-substitution
+# round-trip); every other body byte is untouched. Runs unconditionally on
+# any existing state file — BEFORE the active/status/session gates — so a
+# finished, cancelled or foreign-session loop's file is de-BOM'd too. That is
+# intentional and safe: the rewrite normalizes bytes, never semantics, and
+# set_fm's first-sight session stamp already writes ahead of those gates.
+if [[ "$CONTENT" != "$FM_RAW" ]]; then
+  DEBOM_TMP="$STATE_FILE.tmp.$$"
+  if printf '%s\n' "$CONTENT" > "$DEBOM_TMP" 2>/dev/null; then
+    mv "$DEBOM_TMP" "$STATE_FILE" 2>/dev/null || rm -f "$DEBOM_TMP" 2>/dev/null
+  fi
+fi
+# CONTENT is the BOM-stripped whole file; BOTH the frontmatter reader and the
+# body extraction below must read from it. Reading the body from the raw file
+# again re-introduces the BOM bug for the body only: the BOM glues to the
+# opening '---', the fence counter never reaches 2, and the payload body is
+# silently dropped from every re-inject while the loop looks healthy
+# (2026-08-31 audit F02). Body bytes other than the BOM (CRs included) stay
+# untouched.
+FM="$(printf '%s\n' "$CONTENT" | awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next} f==1{print} f>=2{exit}' | tr -d '\r')"
+# Trailing whitespace is stripped BEFORE the surrounding-quote strip: a
+# hand-edited "max_iterations: 5 " (invisible trailing space) otherwise fails
+# num10's digit test and silently falls to the default — for a cap that means
+# the user's budget is discarded and the backstop stamps 25 over it
+# (2026-08-31 audit F04). Quoted values keep any inner whitespace: only space
+# OUTSIDE the quotes is scaffolding. Failure direction: none new — this only
+# widens what parses as the user's actual value.
+fm() { printf '%s\n' "$FM" | grep "^$1:" | head -1 | sed -e "s/^$1:[[:space:]]*//" -e 's/[[:space:]]*$//' | sed 's/^"\(.*\)"$/\1/'; }
 # Decimal-normalize a numeric fm value: a leading zero ("08"/"09") is DECIMAL, but bash
 # arithmetic reads it as octal ("value too great for base" — crash or silent check-skip;
 # audit F1). Guards pass ^[0-9]+$ so the shape is already digits; force base 10.
@@ -186,8 +234,11 @@ build_catalog() { # cap
       high) rank=0 ;; medium) rank=1 ;; low) rank=2 ;;
       *) continue ;;
     esac
-    hits="$(card_field "$f" hits)"; [[ "$hits" =~ ^[0-9]+$ ]] || hits=1
-    hits=$((10#$hits))   # force base-10: a leading-zero hits (08/09) is decimal, not octal
+    # num10, not a bare regex+$((10#..)): an unbounded digit test lets a >18-digit
+    # hits wrap NEGATIVE (the exact overflow num10 exists for) — rendering
+    # "hits:-25377…" and inverting the rank (2026-08-31 audit F08). num10 also handles the
+    # leading-zero decimal case (08/09).
+    hits="$(num10 "$(card_field "$f" hits)" 1)"
     tags="$(card_field "$f" tags | tr -d '[] ')"
     rows+="$(printf '%d\t%09d\t%s\t%s\t%s\t%s' "$rank" "$((999999999 - hits))" "$slug" "$tags" "$sev" "$hits")"$'\n'
     total=$((total + 1))
@@ -264,6 +315,7 @@ fi
 # ---- last assistant message ----------------------------------------------
 TRANSCRIPT="$(printf '%s' "$HOOK_INPUT" | jq -r '.transcript_path // ""')"
 LAST_OUTPUT=""
+TURN_TEXT_ALL=""
 if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # Parse line-by-line with fromjson? so ONE malformed line (a partial write,
   # a crash mid-append) skips that line instead of aborting the whole parse.
@@ -299,7 +351,13 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # has strictly more rows to trip over).
   # Failure direction: a turn with no text anywhere still yields "" — the loop
   # keeps iterating within budgets, never a teardown on a stale claim.
-  LAST_OUTPUT="$(jq -rRs '
+  # One parse, two views: .l is the sentinel-bearing entry (the LAST text-bearing
+  # one — the locked v0.2.1 semantics), .a is EVERY text-bearing entry of the
+  # turn joined. .a exists only to tell "a turn with no sentinel at all" apart
+  # from "a turn whose sentinel sits in an earlier entry" — the stale-counter
+  # reset below must not fire on the latter (2026-08-31 audit F03). Emitted as one JSON
+  # object so the transcript is still parsed exactly once per Stop.
+  TURN_SCAN="$(jq -cRs '
       [ split("\n")[] | fromjson? | objects ] as $rows
       | ( [ $rows | to_entries[]
             | select(.value.isSidechain != true)
@@ -316,8 +374,11 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
           | if type=="array"
             then ([ .[] | objects | select(.type=="text") | .text | strings ] | join("\n"))
             else tostring end
-          | select(test("\\S")) ] | last // ""
+          | select(test("\\S")) ] as $texts
+      | {l: ($texts | last // ""), a: ($texts | join("\n"))}
     ' "$TRANSCRIPT" 2>/dev/null || echo "")"
+  LAST_OUTPUT="$(printf '%s' "$TURN_SCAN" | jq -r '.l // ""' 2>/dev/null || echo "")"
+  TURN_TEXT_ALL="$(printf '%s' "$TURN_SCAN" | jq -r '.a // ""' 2>/dev/null || echo "")"
 fi
 
 norm() { printf '%s' "$1" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//'; }
@@ -375,11 +436,19 @@ if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]
       STALE_NOTE="--- repete: your <repete-done> claim does NOT match the stored mission goal (claim ${STALE}/${STALE_LIMIT}). Either the work is not actually done, or you are quoting the goal string wrong: re-read .repete/MISSION.md and copy the exact goal. Do not re-emit the same claim unchanged."
     fi
   else
-    # No done-sentinel this turn: the agent did work, not a false claim. Reset
-    # the run (write only if non-zero — no pointless write on every Stop).
-    # Deliberate: an agent interleaving real work with claims resets, which
-    # protects stage-wise approaches from false positives.
-    if [[ "$STALE" -gt 0 ]]; then
+    # No done-sentinel in the LAST text entry. Two different turns land here:
+    # a plain work turn (no sentinel anywhere) — reset the run, deliberate, so
+    # stage-wise loops don't false-trip — and a turn whose sentinel sits in an
+    # EARLIER entry (claim, then a tool call or wrap-up text). The second is
+    # NOT a plain work turn: the locked v0.2.1 semantics keep it un-honored and
+    # un-counted (the last text entry wins), but letting it RESET the counter
+    # meant an agent that habitually appends text after a claim could never
+    # trip paused-stale at all (2026-08-31 audit F03, reproduced). Treat it as NEUTRAL:
+    # no teardown, no count, no reset. Failure direction: perl missing/failing
+    # reads as "no sentinel elsewhere" -> reset, the pre-existing behavior.
+    TURN_HAS_DONE=0
+    printf '%s' "$TURN_TEXT_ALL" | perl -0777 -ne 'exit(/<repete-done>.*?<\/repete-done>/s ? 0 : 1)' 2>/dev/null && TURN_HAS_DONE=1
+    if [[ "$STALE" -gt 0 && "$TURN_HAS_DONE" -eq 0 ]]; then
       set_fm stale_count 0
       STALE=0
     fi
@@ -462,7 +531,18 @@ if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
     # re-inject the agent would never see it after rehydrate — the counter
     # advances toward paused-stale with the reason lost (audit F2).
     : > "$REPETE_DIR/handoff.md"
-    set_fm status summarizing
+    # If the 'summarizing' mark cannot persist (read-only .repete/, disk full),
+    # pass 1 would re-fire on EVERY Stop — status never advances and pass 1
+    # never bumps iteration, so neither budget can ever fire: a blocked-Stop
+    # trap with no exit (fail-CLOSED, the forbidden direction; 2026-08-31 audit F01,
+    # reproduced). Failure direction: fail OPEN — let the Stop through with a
+    # visible warning. The warning repeats on each Stop while the write keeps
+    # failing (no marker can be written either) — noisy, never trapping, the
+    # same accepted direction as the no-jq marker-write failure.
+    if ! set_fm status summarizing; then
+      emit "⚠️ repete: cannot write .repete/loop.local.md (read-only? disk full?) — the loop cannot track progress, so this Stop is allowed through. Fix the write problem, then /repete-continue."
+      exit 0
+    fi
     HANDOFF_REINJECT='--- repete context checkpoint: write a handoff snapshot, then STOP ---
 The context budget is reached and this conversation is about to be /clear-ed. Capture the in-flight state that is NOT yet on disk so the next session resumes losslessly.
 
@@ -505,11 +585,22 @@ fi
 
 # ---- (3) autonomous continue: block + re-inject --------------------------
 NEXT=$((ITERATION + 1))
-set_fm iteration "$NEXT"
+# A failed iteration write freezes the counter, making max_iterations
+# unreachable while re-injects continue forever — the same fail-closed trap as
+# the pass-1 case above (2026-08-31 audit F01). Failure direction: fail OPEN with a
+# visible warning; blocking is only allowed when progress can be persisted.
+if ! set_fm iteration "$NEXT"; then
+  emit "⚠️ repete: cannot write .repete/loop.local.md (read-only? disk full?) — the loop cannot track progress, so this Stop is allowed through. Fix the write problem, then /repete-continue."
+  exit 0
+fi
 
 # Everything after the SECOND '---'. Print-before-increment so a '---' horizontal
-# rule inside the body is preserved, not swallowed (I1).
-PAYLOAD_BODY="$(awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$STATE_FILE")"
+# rule inside the body is preserved, not swallowed (I1). Reads the BOM-stripped
+# in-memory CONTENT, not the file: re-reading the raw file resurrects the BOM
+# body-drop (2026-08-31 audit F02, see the CONTENT comment above), and C1 guarantees the
+# set_fm writes made earlier this run never touched the body, so the in-memory
+# copy is current.
+PAYLOAD_BODY="$(printf '%s\n' "$CONTENT" | awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}')"
 
 # --- lessons catalog (metadata only; bodies are agent-retrieved on demand) -
 CATALOG=""

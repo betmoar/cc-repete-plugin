@@ -604,7 +604,9 @@ echo "== Golden: default-config re-inject is byte-identical across runs =="
 # deterministic (phase/iteration counters, no timestamps), so byte-compare two
 # independent runs of the same fixture AND lock the exact content — any future
 # change to the default re-inject (new rule, reworded protocol, reordered layer)
-# must update this golden deliberately.
+# must update this golden deliberately: run `bash tests/regen-golden.sh` (its
+# fixture mirrors this block — keep them in sync) and commit the new sha WITH
+# the change that moved it.
 scaffold ""
 mktx "did some work"
 G_OUT1="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"GOLD\"}")"
@@ -646,15 +648,23 @@ for key in stale_count stale_limit gauntlet reference bar max_iterations context
   ck "doc-lock: '$key' in template frontmatter + /repete scaffold prose + /repete-status" \
      "grep -q '$key' \"$ROOT/templates/loop.local.md\" && grep -q '$key' \"$ROOT/commands/repete.md\" && grep -q '$key' \"$ROOT/commands/repete-status.md\""
 done
+# release machinery: the maintainer map must name the gate and the golden regen tool —
+# CLAUDE.md drifted behind the release pipeline once already (2026-08-31 audit F09).
+ck "doc-lock: CLAUDE.md names the release gate" 'grep -q "release-gate" "$ROOT/CLAUDE.md"'
+ck "doc-lock: CLAUDE.md names regen-golden"     'grep -q "regen-golden" "$ROOT/CLAUDE.md"'
+ck "doc-lock: golden test block points at regen-golden" 'grep -q "regen-golden" "$ROOT/tests/test-hooks.sh"'
 
 
 echo "== No perl on PATH: hook degrades to raw-read (fail-open, loop survives) =="
 # Minimal PATH without perl; the state read must fall back to raw (BOM unstripped
 # — pre-F7 behavior) instead of yielding empty input and silently deactivating.
 MINBIN="$(mktemp -d)"
+# mv IS in this list: set_fm needs it, and since the A-F01 fix a failed state
+# write correctly fails OPEN (no block) — omitting mv here would test "no perl
+# AND unwritable state", which is A-F01's fixture, not this one's.
 while IFS= read -r t; do
   p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$MINBIN/$t"
-done < <(printf '%s\n' bash sh cat grep sed awk tr printf head wc jq env ln)
+done < <(printf '%s\n' bash sh cat grep sed awk tr printf head wc jq env ln mv)
 rm -f "$MINBIN/perl"
 scaffold ""
 mktx "did some work"
@@ -670,6 +680,29 @@ printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TM
 OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
   | env PATH="$MINBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
 ck "no-perl + BOM: silent exit (pre-F7 inactive), no crash output" '[ -z "$OUT" ]'
+
+echo "== Failing perl: a truncated read must NOT be committed to disk =="
+# A perl that is OOM-killed or crashes mid-stream still flushed bytes to stdout,
+# so $CONTENT is non-empty but TRUNCATED. Pre-fix it passed the -n guard and the
+# de-BOM rewrite committed the fragment: a 1.1MB state file was reproduced
+# collapsing to 24KB, payload body included. A stub perl that exits non-zero
+# after partial output reproduces exactly that shape.
+PBIN="$(mktemp -d)"
+while IFS= read -r t; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$PBIN/$t"
+done < <(printf '%s\n' bash sh cat grep sed awk tr printf head wc jq env ln mv)
+printf '%s\n' '#!/bin/sh' 'head -c 40' 'exit 137' > "$PBIN/perl"
+chmod +x "$PBIN/perl"
+scaffold ""
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+BEFORE="$(wc -c < "$TMP/.repete/loop.local.md" | tr -d ' ')"
+mktx "did some work"
+printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$PBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" >/dev/null 2>&1
+AFTER="$(wc -c < "$TMP/.repete/loop.local.md" | tr -d ' ')"
+ck "failing perl: state file NOT truncated (raw-read fallback)" '[ "$AFTER" -eq "$BEFORE" ]'
+ck "failing perl: payload body survives on disk" 'grep -q "do the slice" "$TMP/.repete/loop.local.md"'
+rm -rf "$PBIN"
 
 echo "== num10 overflow: huge digit-string defaults, never negative =="
 scaffold ""
@@ -1015,5 +1048,130 @@ EXIT_ARM="$(grep -E '^[[:space:]]*paused-checkpoint\|' "$H" | head -1 | sed 's/)
 ck "#16: early-exit arm found" '[ -n "$EXIT_ARM" ]'
 ck "#16: early-exit arm is exactly the documented status set" \
    '[ "$EXIT_ARM" = "paused-checkpoint|paused-context|paused-max|paused-stale|done|cancelled" ]'
+
+# ---------------------------------------------------------------------------
+# 2026-08-31 audit fixes (this audit's F01–F04, F08 — NOT the 2026-08-16 F1–F14
+# cited elsewhere in comments). Each block locks a reproduced defect.
+# ---------------------------------------------------------------------------
+
+echo "== A-F04: trailing space after a numeric value is the user's value, not malformed =="
+scaffold ""
+setstate max_iterations '5 '     # invisible trailing space from a hand edit
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "A-F04: cap 5 kept — backstop does NOT overwrite with 25" 'grep -qE "^max_iterations: 5" "$TMP/.repete/loop.local.md" && ! grep -qE "^max_iterations: 25" "$TMP/.repete/loop.local.md"'
+ck "A-F04: no safety-cap warning for a real cap" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"safety max_iterations\")" >/dev/null'
+setstate max_iterations '5 '
+setstate iteration 5
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "A-F04: trailing-space cap still ENFORCED (paused-max at 5)" 'grep -qE "^status: paused-max" "$TMP/.repete/loop.local.md"'
+
+echo "== A-F02: BOM'd state file keeps its payload BODY in the re-inject =="
+scaffold ""
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "A-F02: BOM body rides the re-inject (not just decision=block)" 'printf "%s" "$OUT" | jq -e ".reason | test(\"do the slice\")" >/dev/null'
+
+echo "== A-BOM/set_fm: writes on a BOM'd file persist in the FIRST frontmatter block (de-BOM) =="
+# Pre-fix, set_fm read the raw file: the BOM'd opening fence mis-scoped its awk,
+# every write landed in an EOF pseudo-block fm() never read back, the iteration
+# counter froze, and the hook blocked every Stop with the cap unreachable
+# (Copilot review on PR #20 — the F01 trap through a different door).
+scaffold ""
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "BOM/set_fm: file de-BOM'd on disk (starts with the fence)" '[ "$(head -c 3 "$TMP/.repete/loop.local.md")" = "---" ]'
+ck "BOM/set_fm: iteration bump lands in the FIRST frontmatter block" 'awk "/^---/{f++} f==1 && /^iteration: 2/{found=1} END{exit !found}" "$TMP/.repete/loop.local.md"'
+# Counts fence lines over the RAW bytes, optional BOM included: a plain
+# ^--- count is NOT discriminating — pre-fix the file carries a BOM'd
+# opening fence (invisible to ^---) plus the extra one the EOF pseudo-block
+# appends, so it also totals 2. Anchoring the optional BOM makes the third
+# fence visible, so this fails without the de-BOM fix instead of passing
+# for the wrong reason.
+ck "BOM/set_fm: no EOF pseudo-block (exactly two fences)" '[ "$(grep -cE "^($(printf "\xEF\xBB\xBF"))?---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 2 ]'
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "BOM/set_fm: counter advances on the next Stop (3, not frozen)" 'awk "/^---/{f++} f==1 && /^iteration: 3/{found=1} END{exit !found}" "$TMP/.repete/loop.local.md"'
+
+echo "== A-F03: a sentinel in an EARLIER same-turn text entry does not reset the stale counter =="
+scaffold ""
+setstate stale_count 2
+mkrows "$(uprompt 'go')" "$(atext '<repete-done>not the goal</repete-done>')" "$(atext 'summary of the work')"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "A-F03: earlier-entry mismatch is NEUTRAL — counter neither reset nor bumped" 'grep -qE "^stale_count: 2" "$TMP/.repete/loop.local.md"'
+ck "A-F03: neutral turn still re-injects (block)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+ck "A-F03: un-counted claim gets no mismatch note" '! printf "%s" "$OUT" | jq -e ".reason | test(\"does NOT match\")" >/dev/null'
+# ...and the deliberate v0.2.1 half stays locked: a MATCHING claim behind a later
+# text entry still does not tear the loop down (last text entry wins).
+scaffold ""
+mkrows "$(uprompt 'go')" "$(atext '<repete-done>all tests pass</repete-done>')" "$(atext 'wrapping up now')"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "A-F03: matching claim behind trailing text still no teardown (locked)" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "A-F03: matching-claim turn does not touch the counter" 'grep -qE "^stale_count: 0" "$TMP/.repete/loop.local.md"'
+# a plain work turn (no sentinel anywhere) still resets — the pre-existing rule
+scaffold ""
+setstate stale_count 2
+mkrows "$(uprompt 'go')" "$(atext 'plain work, no claims')"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "A-F03: plain work turn still resets the counter" 'grep -qE "^stale_count: 0" "$TMP/.repete/loop.local.md"'
+
+echo "== A-F08: >18-digit lesson hits falls to 1, never wraps negative =="
+scaffold 'lessons_enabled: true'
+rm -f "$TMP/.repete/lessons/001-foo-trap.md"
+printf -- '---\nslug: huge-hits\ntags: [a]\nseverity: high\nhits: 99999999999999999999999999\n---\nb\n' > "$TMP/.repete/lessons/001.md"
+printf -- '---\nslug: normal-hits\ntags: [b]\nseverity: high\nhits: 5\n---\nb\n' > "$TMP/.repete/lessons/002.md"
+mktx "did some work"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+A_CAT="$(printf '%s' "$OUT" | jq -r .reason | sed -n '/Known lessons/,/repete standing rules/p')"
+ck "A-F08: overflow hits renders as its default (hits:1), not negative" 'printf "%s\n" "$A_CAT" | grep -q "huge-hits.*hits:1" && ! printf "%s\n" "$A_CAT" | grep -q "hits:-"'
+ck "A-F08: sane card outranks the overflow card" '[ "$(printf "%s\n" "$A_CAT" | awk "/normal-hits/{print NR}")" -lt "$(printf "%s\n" "$A_CAT" | awk "/huge-hits/{print NR}")" ]'
+
+echo "== A-F01: unwritable .repete/ fails OPEN — the Stop is never blocked =="
+# The trap: with state unwritable, pass-1 re-fires forever (status never
+# advances, iteration never bumps, no budget can fire) — reproduced pre-fix.
+# Root cannot be write-blocked by chmod, so as root run the hook as nobody via
+# runuser; skip only when neither route exists (and say so — no silent green).
+RO_MODE=""
+if [ "$(id -u)" -ne 0 ]; then
+  RO_MODE=direct
+elif command -v runuser >/dev/null 2>&1 && id nobody >/dev/null 2>&1; then
+  RO_MODE=runuser
+fi
+if [ -n "$RO_MODE" ]; then
+  RO_DIR="$(mktemp -d)"
+  mkdir -p "$RO_DIR/.repete"
+  scaffold ""   # build a clean default state, then copy it into the RO fixture
+  cp "$TMP/.repete/loop.local.md" "$RO_DIR/.repete/loop.local.md"
+  mktx "did some work"; cp "$TMP/t.jsonl" "$RO_DIR/t.jsonl"
+  chmod 755 "$RO_DIR"; chmod 644 "$RO_DIR/.repete/loop.local.md" "$RO_DIR/t.jsonl"
+  chmod 555 "$RO_DIR/.repete"
+  ro_run(){ # input
+    if [ "$RO_MODE" = direct ]; then
+      printf '%s' "$1" | CLAUDE_PROJECT_DIR="$RO_DIR" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null
+    else
+      printf '%s' "$1" | runuser -u nobody -- env CLAUDE_PROJECT_DIR="$RO_DIR" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null
+    fi
+  }
+  OUT="$(ro_run "{\"transcript_path\":\"$RO_DIR/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "A-F01: re-inject path with unwritable state does NOT block" '! printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+  ck "A-F01: fail-open warning names the write problem" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  # pass-1 of the context two-step must ALSO bail open, not re-fire forever
+  chmod 755 "$RO_DIR/.repete"
+  awk '{sub(/^context_budget_lines: 0/, "context_budget_lines: 1"); print}' "$RO_DIR/.repete/loop.local.md" > "$RO_DIR/s" \
+    && mv "$RO_DIR/s" "$RO_DIR/.repete/loop.local.md"
+  chmod 644 "$RO_DIR/.repete/loop.local.md"; chmod 555 "$RO_DIR/.repete"
+  printf '%s\n%s\n' \
+    '{"message":{"role":"assistant","content":[{"type":"text","text":"a"}]}}' \
+    '{"message":{"role":"assistant","content":[{"type":"text","text":"b"}]}}' > "$RO_DIR/t.jsonl.2"
+  chmod 644 "$RO_DIR/t.jsonl.2" 2>/dev/null || true
+  OUT="$(ro_run "{\"transcript_path\":\"$RO_DIR/t.jsonl.2\",\"session_id\":\"S1\"}")"
+  ck "A-F01: budget pass-1 with unwritable state does NOT block" '! printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+  ck "A-F01: pass-1 fail-open also warns" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  chmod -R 755 "$RO_DIR"; rm -rf "$RO_DIR"
+else
+  echo "  SKIP: A-F01 read-only-state tests (root without runuser/nobody — cannot simulate an unwritable dir)"
+fi
 
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

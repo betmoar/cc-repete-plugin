@@ -2,6 +2,24 @@
 
 All notable changes to cc-repete are recorded here. Versions follow [semver](https://semver.org/); `.claude-plugin/plugin.json` is the single source of truth. A release is cut by pushing a `v<x.y.z>` tag — the release workflow gates `tag == plugin.json == newest CHANGELOG heading` and publishes the CHANGELOG section as the release body.
 
+## [0.2.2] — 2026-08-31
+
+### Fixed
+- **A failed state write could block Stop forever (fail-closed).** With `.repete/` unwritable (disk full, permissions), the context-budget pass-1 re-fired on every Stop — `summarizing` never persisted and pass-1 never bumps iteration, so neither budget could ever fire; the general case (a frozen iteration counter making `max_iterations` unreachable) had the same shape. Reproduced with a read-only state dir. The two blocking paths (budget pass-1, iteration bump) now bail OPEN with a visible warning when the write fails: blocking is only allowed when progress can be persisted.
+- **A UTF-8 BOM silently dropped the entire payload body from every re-inject.** The v0.2.0 BOM hardening covered the frontmatter reader only; body extraction re-read the raw file, the BOM glued to the opening `---`, and the working brief vanished while the loop looked healthy. Body extraction now reads the same BOM-stripped content as the frontmatter reader.
+- **A done-claim in an earlier same-turn text entry no longer resets the stale counter.** The last-text-entry-wins semantics stand (no teardown, no count — deliberate since v0.2.1), but such a turn was also treated as "plain work" and RESET `stale_count` — so an agent that habitually appended a wrap-up sentence after its claims could never trip `paused-stale`. Those turns are now neutral: no teardown, no count, no reset.
+- **Trailing whitespace after a numeric frontmatter value no longer discards it.** `max_iterations: 5␠` (an invisible hand-edit artifact) read as malformed → default 0 → the backstop stamped 25 over the user's cap of 5; the statusline likewise rendered a capped loop as uncapped. Both parsers now strip trailing whitespace outside quotes.
+- **Lesson-card `hits` values over 18 digits wrapped negative in the catalog** (rank inverted, `hits:-25377…` rendered); they now fall to the same overflow default as every other numeric read.
+- **Release notes truncated at any CHANGELOG body line starting with `[`.** `extractSection` stopped at any `[`-leading line, not just the link-reference block; a `[MEASURED: …]`-style line cut the published notes silently. The stop now matches the reference shape (`[label]: url`) only.
+- **A BOM'd state file also froze the iteration counter while the hook kept blocking.** Reads were made BOM-safe earlier, but `set_fm` still read the raw file: the BOM'd opening fence mis-scoped its awk, every write landed in an EOF pseudo-block that reads never saw — writes "succeeded", the counter never advanced, and `max_iterations` was unreachable while every Stop was blocked. The hook now de-BOMs the state file on disk once at startup, so reads and writes agree; if that rewrite fails, `set_fm` fails with it and the fail-open bails above release the Stop.
+- **A crashing `perl` could commit a truncated state file to disk.** The BOM strip reads through a command substitution, so a `perl` that is OOM-killed or dies mid-stream still leaves the bytes it already flushed — non-empty, so the raw-read fallback never fired, and the de-BOM rewrite then wrote that fragment over the real file. Reproduced: a 1.1MB state file collapsed to 24KB, taking the payload body with it. The read now fails toward the raw fallback on any non-zero `perl` status.
+
+### Added
+- **The release gate has tests** (`tests/test-release-gate.mjs`, run via `node --test` in run-all.sh and CI) — it used to be exercised for the first time on a tag push, the worst possible moment.
+- **`tests/regen-golden.sh`** regenerates the golden re-inject SHA mechanically after a deliberate default-re-inject change — no more hand-reconstructing the fixture pipeline from the test source.
+- **`marketplace.json` is validated by run-all.sh and CI**, not just at release time — it serves `/plugin marketplace add` from repo HEAD, so a malformed edit used to break installs while CI stayed green.
+- Unwritable-state, BOM-body, BOM-write, neutral-turn, trailing-space, and overflow-hits regressions are all locked by new test blocks (hook suite 237 → 262 assertions); the release workflow runs the release-gate tests too (three-way run-all/ci/release sync); CLAUDE.md gained couplings rows for the release trio, the golden SHA, and the marketplace manifest.
+
 ## [0.2.1] — 2026-08-30
 
 ### Fixed
@@ -36,6 +54,7 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 ### Changed
 - **Docs hardened to match the code.** The couplings table gained rows (stale keys, gauntlet keys, statusline markers, sentinel spellings) and the landmine list grew (STALE_NOTE init-outside-guard, fm() first-key trap, GAUNTLET_FALLBACK mirror). Release notes, specs, README, skills, and commands were swept for drift by three review rounds; a doc-lock test block now enforces the mechanical half of the couplings table, and a golden-SHA test locks the default re-inject byte-for-byte.
 
-[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/betmoar/cc-repete-plugin/compare/v0.1.4...v0.2.0

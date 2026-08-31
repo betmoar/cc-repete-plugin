@@ -140,4 +140,9 @@ perl -i -pe 's/^iteration: 3/iteration: "3"\nstatus: "paused-stale"/' "$TMP/.rep
 OUT="$(run)"
 ck "quoted status paused-stale renders marker" 'printf "%s" "$OUT" | grep -q "stale"'
 
+echo "== A-F04 (2026-08-31 audit): trailing space after max renders the cap, parity with hook fm() =="
+mkstate true 3 '5 '
+OUT="$(run 2>/dev/null)"
+ck "trailing-space max renders rp[3/5], not uncapped" '[ "$OUT" = "rp[3/5]" ]'
+
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

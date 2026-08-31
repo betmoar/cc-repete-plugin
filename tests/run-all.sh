@@ -13,11 +13,22 @@ else
 fi
 
 echo "== plugin manifests are valid JSON =="
+# marketplace.json included: it is read from repo HEAD by `/plugin marketplace
+# add`, so a malformed edit breaks installs while a suite that skips it stays
+# green (2026-08-31 audit F05). Keep this list in sync with ci.yml AND release.yml.
 jq -e . "$ROOT/.claude-plugin/plugin.json" "$ROOT/.claude-plugin/statusline.json" \
+        "$ROOT/.claude-plugin/marketplace.json" \
         "$ROOT/hooks/hooks.json" >/dev/null || { echo "  FAIL: manifest JSON"; rc=1; }
 
 bash "$ROOT/tests/test-hooks.sh" || rc=1
 bash "$ROOT/tests/test-statusline.sh" || rc=1
+
+if command -v node >/dev/null 2>&1; then
+  echo "== release gate (scripts/release-gate.mjs) =="
+  node --test "$ROOT/tests/test-release-gate.mjs" || rc=1
+else
+  echo "== release gate: node not installed — SKIPPED locally (CI still enforces it) =="
+fi
 
 [ "$rc" -eq 0 ] && echo "ALL SUITES GREEN" || echo "SUITE FAILURES — see above"
 exit "$rc"

@@ -33,7 +33,11 @@ export function extractSection(changelogText, version) {
 	const start = new RegExp(`^## \\[${esc}\\][^\\n]*\\n`, "m").exec(changelogText);
 	if (!start) return "";
 	const rest = changelogText.slice(start.index + start[0].length);
-	const stop = /^## \[|^\[/m.exec(rest);
+	// Stop at the next version heading or the link-reference block. The block
+	// test must match the reference SHAPE ("[label]: url"), not any line that
+	// merely starts with '[' — a body line like "[MEASURED: …] note" would
+	// silently truncate the published release notes (2026-08-31 audit F07).
+	const stop = /^## \[|^\[[^\]]+\]:\s/m.exec(rest);
 	return (stop ? rest.slice(0, stop.index) : rest).trim();
 }
 
