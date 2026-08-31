@@ -69,8 +69,19 @@ HOOK_INPUT="$(cat)"
 # fail-open direction as the BOM/CRLF cases; pathological, accepted.
 FM_RAW="$(cat "$STATE_FILE" 2>/dev/null)"
 CONTENT=""
+# The assignment is wrapped in `if` so a FAILING perl is caught: under pipefail
+# the command substitution inherits the pipeline's status, so a perl that is
+# OOM-killed or crashes mid-stream fails here even though it already flushed
+# bytes to stdout. Without this, a truncated-but-non-empty read passes the
+# -n guard below, and the de-BOM rewrite then commits that fragment to disk —
+# a 1.1MB state file was reproduced collapsing to 24KB, taking the payload
+# body with it. Failure direction: any non-zero perl status discards CONTENT
+# and falls back to the RAW read (a BOM'd file degrades to inactive, the
+# pre-F7 direction) — never a partial write over the user's state.
 if command -v perl >/dev/null 2>&1; then
-  CONTENT="$(printf '%s' "$FM_RAW" | perl -pe 's/^\xEF\xBB\xBF// if $. == 1' 2>/dev/null)"
+  if ! CONTENT="$(printf '%s' "$FM_RAW" | perl -pe 's/^\xEF\xBB\xBF// if $. == 1' 2>/dev/null)"; then
+    CONTENT=""
+  fi
 fi
 [[ -n "$CONTENT" ]] || CONTENT="$FM_RAW"
 # De-BOM the state file ON DISK, once, when a BOM was actually stripped above
@@ -85,7 +96,11 @@ fi
 # this rewrite fails (read-only dir), the file stays BOM'd and set_fm fails
 # right along with it — the F01 bail-open paths then let the Stop through.
 # Trailing-newline runs are normalized to one (command-substitution
-# round-trip); every other body byte is untouched.
+# round-trip); every other body byte is untouched. Runs unconditionally on
+# any existing state file — BEFORE the active/status/session gates — so a
+# finished, cancelled or foreign-session loop's file is de-BOM'd too. That is
+# intentional and safe: the rewrite normalizes bytes, never semantics, and
+# set_fm's first-sight session stamp already writes ahead of those gates.
 if [[ "$CONTENT" != "$FM_RAW" ]]; then
   DEBOM_TMP="$STATE_FILE.tmp.$$"
   if printf '%s\n' "$CONTENT" > "$DEBOM_TMP" 2>/dev/null; then

@@ -681,6 +681,29 @@ OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}
   | env PATH="$MINBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
 ck "no-perl + BOM: silent exit (pre-F7 inactive), no crash output" '[ -z "$OUT" ]'
 
+echo "== Failing perl: a truncated read must NOT be committed to disk =="
+# A perl that is OOM-killed or crashes mid-stream still flushed bytes to stdout,
+# so $CONTENT is non-empty but TRUNCATED. Pre-fix it passed the -n guard and the
+# de-BOM rewrite committed the fragment: a 1.1MB state file was reproduced
+# collapsing to 24KB, payload body included. A stub perl that exits non-zero
+# after partial output reproduces exactly that shape.
+PBIN="$(mktemp -d)"
+while IFS= read -r t; do
+  p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$PBIN/$t"
+done < <(printf '%s\n' bash sh cat grep sed awk tr printf head wc jq env ln mv)
+printf '%s\n' '#!/bin/sh' 'head -c 40' 'exit 137' > "$PBIN/perl"
+chmod +x "$PBIN/perl"
+scaffold ""
+printf '\xEF\xBB\xBF' | cat - "$TMP/.repete/loop.local.md" > "$TMP/s" && mv "$TMP/s" "$TMP/.repete/loop.local.md"
+BEFORE="$(wc -c < "$TMP/.repete/loop.local.md" | tr -d ' ')"
+mktx "did some work"
+printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | env PATH="$PBIN" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" >/dev/null 2>&1
+AFTER="$(wc -c < "$TMP/.repete/loop.local.md" | tr -d ' ')"
+ck "failing perl: state file NOT truncated (raw-read fallback)" '[ "$AFTER" -eq "$BEFORE" ]'
+ck "failing perl: payload body survives on disk" 'grep -q "do the slice" "$TMP/.repete/loop.local.md"'
+rm -rf "$PBIN"
+
 echo "== num10 overflow: huge digit-string defaults, never negative =="
 scaffold ""
 setstate max_iterations 99999999999999999999999999
