@@ -236,7 +236,7 @@ If you add a check, decide its failure direction first and write it in a comment
 
 ## Residual risks / backlog (prioritized, with context)
 
-1. **`/repete-continue`'s checkpoint promotion is prompt-code** — the agent hand-edits
+1. **`/repete-continue`'s checkpoint promotion is prompt-code** (issue #8) — the agent hand-edits
    frontmatter (phase +1, iteration reset, blank session). A `hooks/promote.sh` the
    command shells out to would make it mechanical and testable. Medium effort.
 2. **Transcript parse trusts `.message.role` / `.type` shape.** v0.2.1 leans on it
@@ -245,11 +245,11 @@ If you add a check, decide its failure direction first and write it in a comment
    degrades to "scan everything" (the pre-v0.2.1 scope, fail-open) — but watch Claude
    Code release notes, and re-check `hooks/stop-hook.sh`'s `$turn_start` if the shape
    of user/tool_result entries moves.
-3. **`context_budget_lines` counts transcript lines, not tokens** — documented as a
+3. **`context_budget_lines` counts transcript lines, not tokens** (issue #15) — documented as a
    loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
-4. **v2/v3 roadmap** (README): phased missions; global lesson store with
+4. **v2/v3 roadmap** (README, issues #13/#14): phased missions; global lesson store with
    recurrence-gated promotion. The state model was designed to extend to both.
-5. **Per-Stop transcript cost is O(whole transcript)** (audit F13, measured 342MB RSS /
+5. **Per-Stop transcript cost is O(whole transcript)** (issue #9) (audit F13, measured 342MB RSS /
    ~2.8s per Stop on a 32MB transcript, re-paid every iteration). A naive tail-bound is
    UNSAFE (500 trailing sidechain lines can hide the last main-thread sentinel —
    fail-closed); the fix needs a grow-the-window scan that falls back to a full read
@@ -259,8 +259,8 @@ If you add a check, decide its failure direction first and write it in a comment
    changed WHICH entry is chosen, not how much is parsed. The grow-the-window fix must
    preserve the turn boundary, so its window has to reach back past the last user entry,
    not just past the last assistant text.
-6. **Sentinel visibility across a multi-entry turn — open design question** (2026-08-31
-   audit F03 residue): a done-claim in an EARLIER text entry of the turn is neutral
+6. **Sentinel visibility across a multi-entry turn — open design question** (issue #24;
+   2026-08-31 audit F03 residue): a done-claim in an EARLIER text entry of the turn is neutral
    since v0.2.2 (no teardown, no count, no longer a counter reset), but it is still
    invisible — a correct claim followed by a wrap-up sentence burns iterations to the
    budget with zero feedback. The full fix is joining ALL the turn's text entries for
@@ -274,6 +274,25 @@ If you add a check, decide its failure direction first and write it in a comment
    fenceless-file append (#11), bare `paused` removal (#12), no-jq warn-once (#7),
    the three missing tests (#16), and the `jq -e` assertion convention (#17 —
    documented in the test header, applied to new assertions, migrated opportunistically).
+8. **A failed `set_fm` write announces success it never persisted** (issue #21) — only the
+   two paths that would otherwise BLOCK check the write result (v0.2.2, F01). The rest
+   `exit 0` immediately, so they never trap, but they emit a confident `✅ done` /
+   `⏸ paused` while the state file keeps `status: running` — a later Stop then resumes
+   the "finished" loop. `stale_count` never persisting also means `stale_limit` can never
+   be reached. Pre-existing (reproduced identically on v0.2.1), and the mirror of the
+   counter-rule: a teardown or pause the hook really DECIDED must be PERSISTED. `set_fm`
+   additionally orphans its `.tmp.$$` when `mv` fails — no `|| rm -f`, unlike the de-BOM
+   block. Fix both in one pass; a shared `set_fm_or_warn` beats ten copies of the branch.
+9. **Release notes still truncate at a `[LABEL]: text` body line** (issue #22) — v0.2.2's
+   F07 fix narrowed the stop pattern to the reference SHAPE, which kills the
+   `[MEASURED: …]` case but not `[BREAKING]: config format changed`. `gate()` returns
+   success and the loss is silent. Requiring the URL shape (`:\s*\S+://`), or anchoring
+   on the trailing contiguous reference block, closes the class.
+10. **`docs/spec/*` is outside the couplings table** (issue #23) — step 4 of "How to change
+   the hook safely" names commands/README/skills, not the spec directory, which is how
+   `stale-detection.md` came to document the pre-F03 reset as current until a review
+   round caught it. These are design records, not prompt-code, so a doc-lock test may be
+   the wrong tool — a header line stating the hook is authoritative might serve better.
 
 ## Operator
 
