@@ -85,6 +85,19 @@ tearing the loop down on a false positive. Concrete embodiments:
   don't false-trip. The yield is budget-class: it stops even autonomous loops, because a
   loop that repeatedly false-claims done is exactly the failure it exists to catch.
 - A stray sentinel during `summarizing` is ignored: the budget two-step owns that Stop.
+- **A failed state write fails OPEN, never closed** (2026-08-31 audit F01): if `set_fm`
+  cannot persist (read-only `.repete/`, disk full), the two paths that BLOCK — budget
+  pass-1 and the iteration bump — bail with a warning and let the Stop through. Without
+  this, pass-1 re-fired on every Stop forever (status never advanced, iteration never
+  bumped, so no budget could fire — reproduced). Blocking is only allowed when progress
+  can be persisted. The warning repeats while writes keep failing (no marker can be
+  written either) — noisy, never trapping.
+- **A turn whose done-claim sits in an EARLIER text entry is NEUTRAL** (audit F03): the
+  last text entry still wins (locked v0.2.1 semantics — no teardown, no count), but such
+  a turn no longer RESETS `stale_count` — pre-fix, an agent that habitually appended text
+  after claims could never trip `paused-stale`. Only a turn with no done sentinel
+  anywhere resets. Perl missing → reads as "no sentinel elsewhere" → reset (pre-existing
+  direction).
 - **A sentinel the agent really emitted must be SEEN** (v0.2.1, issue #18). Missing one
   looks fail-open (the loop keeps going) but is a trap in practice: a correct done-claim
   that the hook cannot see never tears down, never counts as stale, and never reaches the
@@ -109,7 +122,10 @@ If you add a check, decide its failure direction first and write it in a comment
 | Transcript scan shape (`$turn_start`, text-bearing pick) | The #18 test block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, `tool_result`+text mixed, sidechain | tests: `#18` blocks |
 | `.repete/.warned-nojq` marker path | Hook no-jq branch + the warning text that names it for deletion | tests: `#7` blocks |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
-| `tests/run-all.sh` checks | `.github/workflows/ci.yml` (and vice versa) | not enforced — keep in sync by hand |
+| `tests/run-all.sh` checks | `.github/workflows/ci.yml` AND `.github/workflows/release.yml` (three sites, all by hand) | not enforced — keep in sync by hand |
+| Default re-inject content (protocol wording, rules, assembly) | `tests/golden-default-reinject.sha` — regenerate with `bash tests/regen-golden.sh` (its fixture mirrors the golden test block; keep both in sync) | test: golden block |
+| `plugin.json` version | Newest `## [x.y.z]` CHANGELOG heading + README version line + the release tag | `scripts/release-gate.mjs` at tag push; `tests/test-release-gate.mjs` |
+| `.claude-plugin/marketplace.json` | jq validity check in run-all.sh + ci.yml + release.yml (it serves `/plugin marketplace add` from repo HEAD) | run-all/ci jq step |
 
 ## Landmines (non-obvious decisions that look like mistakes)
 
@@ -209,9 +225,14 @@ If you add a check, decide its failure direction first and write it in a comment
    `scaffold`/`setstate`/`mktx`/`run` are the whole harness — note `scaffold` seeds a
    lesson card, remove it if your fixture ranks cards).
 2. Make the smallest change that passes; state the failure direction in a comment.
-3. `bash tests/run-all.sh` — all suites plus shellcheck must be green.
+3. `bash tests/run-all.sh` — all suites plus shellcheck must be green. If you changed
+   the default re-inject deliberately, `bash tests/regen-golden.sh` and commit the new
+   sha WITH the change.
 4. Grep commands/README/skills for descriptions of the behavior you changed.
-5. Bump `version` in `.claude-plugin/plugin.json` and the README's version line.
+5. Bump `version` in `.claude-plugin/plugin.json`, the README's version line, AND add
+   the matching `## [x.y.z]` entry newest in CHANGELOG.md — the release is tag-driven
+   (`.github/workflows/release.yml` + `scripts/release-gate.mjs`) and the gate fails any
+   tag where the trio disagrees; the CHANGELOG section becomes the release body.
 
 ## Residual risks / backlog (prioritized, with context)
 
@@ -238,7 +259,16 @@ If you add a check, decide its failure direction first and write it in a comment
    changed WHICH entry is chosen, not how much is parsed. The grow-the-window fix must
    preserve the turn boundary, so its window has to reach back past the last user entry,
    not just past the last assistant text.
-6. **Audit cuts still open** (from the 2026-08-16 max audit, verified but unfixed):
+6. **Sentinel visibility across a multi-entry turn — open design question** (2026-08-31
+   audit F03 residue): a done-claim in an EARLIER text entry of the turn is neutral
+   since v0.2.2 (no teardown, no count, no longer a counter reset), but it is still
+   invisible — a correct claim followed by a wrap-up sentence burns iterations to the
+   budget with zero feedback. The full fix is joining ALL the turn's text entries for
+   sentinel detection, but that reverses the test-locked v0.2.1 "later text entry wins"
+   decision (a claim the agent verbally walked back would then tear the loop down —
+   the expensive failure direction). Decide only with real-transcript evidence of how
+   often each shape occurs; the `#18` test block is where both directions are pinned.
+7. **Audit cuts still open** (from the 2026-08-16 max audit, verified but unfixed):
    the "keep/!update" garble lineage in repete-continue step 4 (fixed wording, watch
    regressions). The rest of that list shipped in v0.2.1: `set_fm` ENVIRON (#10),
    fenceless-file append (#11), bare `paused` removal (#12), no-jq warn-once (#7),

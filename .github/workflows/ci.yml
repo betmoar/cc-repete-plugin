@@ -15,8 +15,10 @@ jobs:
       - name: shellcheck
         run: shellcheck hooks/*.sh statusline/*.sh tests/*.sh
       - name: plugin manifests are valid JSON
-        run: jq -e . .claude-plugin/plugin.json .claude-plugin/statusline.json hooks/hooks.json > /dev/null
+        run: jq -e . .claude-plugin/plugin.json .claude-plugin/statusline.json .claude-plugin/marketplace.json hooks/hooks.json > /dev/null
       - name: hook engine tests
         run: bash tests/test-hooks.sh
       - name: statusline tests
         run: bash tests/test-statusline.sh
+      - name: release gate tests
+        run: node --test tests/test-release-gate.mjs
