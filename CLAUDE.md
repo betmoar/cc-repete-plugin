@@ -254,10 +254,16 @@ If you add a check, decide its failure direction first and write it in a comment
   file the loop still burned 2000+16000+128000 wasted lines before the full read, +78%
   wall-clock — the same magnitude as the regression the bound was meant to remove. The
   live rule tracks `PARSED_LINES` and stops once parsed-so-far plus the next window would
-  exceed a QUARTER of the file, which caps the worst case at ~1.25x a plain full read
-  regardless of growth factor or boundary depth (256k deep-boundary: +78% → +9%). The
-  case the window exists for — a boundary a few thousand lines back in a 100k-line
-  transcript — stops at the first window and never reaches this bound.
+  exceed a QUARTER of the file (256k deep-boundary: +78% → +9%). That alone is NOT enough:
+  a file just over one window pays a whole wasted window plus the full read — 4001 lines
+  parsed for a 2001-line question, 2.0x, worse than never windowing. Review caught the
+  "~1.25x regardless of depth" claim being false there — the SECOND unqualified worst-case
+  bound to ship in this block. Fixed in the code, not the wording: the direct-read guard
+  is `4 * WINDOW_LINES`, below which windowing cannot pay for itself (the first window is
+  already ≥25% of the file). With both rules the 1.25x bound holds at EVERY size —
+  simulated over 2001..400000 lines, peak exactly 1.25x near 72000. The case the window
+  exists for — a boundary a few thousand lines back in a 100k-line transcript — stops at
+  the first window and never reaches this bound.
   **A wall-clock assertion in CI is a flake generator, so the test pins the ANSWER on a
   deep-boundary transcript, not the timing.** The perf claim is measured by hand; if you
   change the bound, re-measure rather than trusting the suite.

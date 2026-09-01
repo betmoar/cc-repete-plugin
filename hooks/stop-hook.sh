@@ -471,8 +471,19 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # Using one counter for both keeps them from drifting apart again. Measured
   # on 37.9MB/100k lines: grep -c 0.00s, wc -l 0.04s, awk END{NR} 0.76s.
   TOTAL_LINES="$(grep -c '' "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
-  if [[ -n "${TOTAL_LINES:-}" && "$TOTAL_LINES" -le "$WINDOW_LINES" ]]; then
-    # The file already fits in one window: read it directly, skip the loop.
+  # Direct read at FOUR windows, not one. A file only slightly larger than one
+  # window is the worst case for windowing: it pays a full wasted window and
+  # then the full read anyway. At 2001 lines that is 4001 lines parsed for a
+  # 2001-line question — 2.0x, worse than never windowing at all, and it made
+  # the "~1.25x worst case" claim in the docs false (caught in review; the
+  # SECOND time an unqualified worst-case bound shipped here, so the fix is to
+  # make the code match the claim rather than soften the claim). Below 4x the
+  # window there is nothing to win: the first window alone is ≥25% of the file.
+  # With this guard the worst case really is 1.25x for every file size —
+  # verified by simulating the loop arithmetic over 2001..400000 lines.
+  DIRECT_READ_MAX=$(( WINDOW_LINES * 4 ))
+  if [[ -n "${TOTAL_LINES:-}" && "$TOTAL_LINES" -le "$DIRECT_READ_MAX" ]]; then
+    # Small enough that windowing cannot pay for itself: read it directly.
     TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
   else
     TURN_SCAN_TMP="$(mktemp "${TMPDIR:-/tmp}/repete-window.XXXXXX" 2>/dev/null || echo "")"
@@ -533,10 +544,12 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
       # regression that bound was meant to remove).
       # So bound the CUMULATIVE window work instead: once the windows parsed so
       # far plus the next one would exceed a QUARTER of the file, stop guessing
-      # and read the file. Worst case is then ~1.25x a plain full read, whatever
-      # the growth factor or how deep the boundary sits, while the case the window
-      # exists for — a boundary a few thousand lines back in a 100k-line
-      # transcript — still stops at the first small window and never reaches here.
+      # and read the file. Together with the 4-window direct-read guard above
+      # (which removes the small-file case where one wasted window plus a full
+      # read is 2x), the worst case is 1.25x a plain full read at EVERY file
+      # size — simulated over 2001..400000 lines, peak 1.25x at ~72000. The case
+      # the window exists for — a boundary a few thousand lines back in a 100k
+      # line transcript — stops at the first window and never reaches here.
       # TOTAL_LINES and WINDOW_ROWS are grep -c counts (never wc -l).
       PARSED_LINES=$(( PARSED_LINES + WINDOW_ROWS ))
       NEXT_WINDOW=$(( WINDOW_LINES * WINDOW_GROWTH ))
