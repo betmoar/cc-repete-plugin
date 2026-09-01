@@ -632,8 +632,17 @@ if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /.*<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
   if [[ -n "$DONE" ]]; then
     if [[ "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
-      set_fm_or_warn status "done"
+      # ORDER MATTERS: `active` first. set_fm_or_warn exits on the FIRST failed
+      # write, so the only reachable partial is "write 1 landed, write 2 did
+      # not" (disk fills between them). With `status` first that partial is
+      # `status: done / active: true` — the hook early-exits on the status, but
+      # the statusline keys off `active` and renders the torn-down loop as a
+      # healthy running one, and /repete-status reads it as live. Writing
+      # `active: false` first makes the same partial degrade to an INERT loop
+      # (the ACTIVE gate above exits, the statusline prints nothing), which is
+      # the fail-open direction (Copilot review, PR #26).
       set_fm_or_warn active false
+      set_fm_or_warn status "done"
       emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
       exit 0
     # Mismatched done-claim: count it, tell the agent why it was rejected.

@@ -1511,4 +1511,44 @@ else
   echo "  SKIP: #21 read-only-state tests (root without runuser/nobody — cannot simulate an unwritable dir)"
 fi
 
+echo "== #21 order: a half-written teardown degrades to INERT, never done+active =="
+# The teardown is two writes and set_fm_or_warn exits on the first failure, so
+# the only reachable partial is "write 1 landed, write 2 did not" (the disk
+# fills between them). With `status` written first that partial is
+# `status: done / active: true`: the hook early-exits on the status, but the
+# statusline and /repete-status both key off `active` and render a torn-down
+# loop as healthy. Writing `active: false` first makes the same partial inert
+# instead (Copilot review, PR #26).
+# Simulated by failing the mv that carries the `active: false` write — the
+# SECOND write pre-fix, the FIRST post-fix. Pre-fix that leaves done+active on
+# disk; post-fix it leaves the file untouched. Either way no completion message.
+scaffold ""
+mktx "<repete-done>all tests pass</repete-done>"
+REAL_MV="$(command -v mv)"
+mkdir -p "$TMP/mvbin"
+{
+  echo '#!/bin/sh'
+  echo 'for a in "$@"; do'
+  echo '  case "$a" in *.tmp.*) if grep -q "^active: false" "$a" 2>/dev/null; then exit 1; fi ;; esac'
+  echo 'done'
+  echo "exec $REAL_MV \"\$@\""
+} > "$TMP/mvbin/mv"
+chmod +x "$TMP/mvbin/mv"
+OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | PATH="$TMP/mvbin:$PATH" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H")"
+ck "#21 order: never leaves status:done with active:true" \
+   '! { grep -qE "^status: done" "$TMP/.repete/loop.local.md" && grep -qE "^active: true" "$TMP/.repete/loop.local.md"; }'
+ck "#21 order: no completion claim on the failed teardown" \
+   '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"mission goal met\")" >/dev/null'
+ck "#21 order: warns that state could not be saved" \
+   'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+ck "#21 order: fails open (no decision key)" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+# Control: with mv working, the same fixture still tears down completely.
+scaffold ""
+mktx "<repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#21 order control: unimpeded teardown writes BOTH keys" \
+   'grep -qE "^active: false" "$TMP/.repete/loop.local.md" && grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

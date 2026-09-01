@@ -73,9 +73,17 @@ rm -rf "$TMP/.repete"; mkdir -p "$TMP/.repete"
 printf -- '---\nactive: true\nphase: 1\nNo closing fence, body glued on\n' > "$TMP/.repete/loop.local.md"
 bash "$P" "$TMP/.repete/loop.local.md" >/dev/null; RC=$?
 ck "exit 0 on fenceless file"        'test "$RC" -eq 0'
-ck "fence repaired (closing --- present)" 'grep -qE "^---[[:space:]]*$" "$TMP/.repete/loop.local.md"'
-ck "all 6 keys land somewhere in file" \
-  '[ "$(grep -cE "^(phase|iteration|stale_count|status|active|session_id):" "$TMP/.repete/loop.local.md")" -ge 6 ]'
+# The assertion must be the COUNT, not the presence, of a fence line: the fixture
+# already carries the OPENING '---', so `grep -qE "^---$"` passes whether or not
+# the repair ran at all — a no-op regression would sail through it (Copilot
+# review, PR #26). Two fences is the actual #11 guarantee.
+ck "fence repaired (exactly 2 fence lines)" \
+  '[ "$(grep -cE "^---[[:space:]]*$" "$TMP/.repete/loop.local.md")" -eq 2 ]'
+# ...and all six keys must land INSIDE that repaired block, i.e. before the
+# closing fence. Counting them file-wide would pass even if the repair appended
+# the fence first and stranded the keys in the body.
+ck "all 6 keys land inside the repaired block" \
+  '[ "$(awk "BEGIN{f=0} /^---[[:space:]]*\$/{f++; next} f==1 && /^(phase|iteration|stale_count|status|active|session_id):/{n++} END{print n+0}" "$TMP/.repete/loop.local.md")" -eq 6 ]'
 ck "byte-intact body line survives" 'grep -q "No closing fence, body glued on" "$TMP/.repete/loop.local.md"'
 
 echo "== A BODY line matching ^status: is NOT rewritten (C1) =="

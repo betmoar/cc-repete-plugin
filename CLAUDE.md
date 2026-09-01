@@ -102,6 +102,14 @@ tearing the loop down on a false positive. Concrete embodiments:
   sites already had. Failure direction: never emit the claimed outcome, never set
   `decision:block`, warn that state could not be saved, exit 0. It must never become a
   new blocking path — that is the one thing this fix could get wrong.
+  **Corollary — a multi-write decision must be ordered so its PARTIAL is the safe state.**
+  `set_fm_or_warn` exits on the first failure, so a two-write decision can only fail as
+  "write 1 landed, write 2 did not". The teardown therefore writes `active: false` BEFORE
+  `status: done`: reversed, that partial is `done` + `active: true`, which the hook reads
+  as finished while the statusline and `/repete-status` (both keyed on `active`) render a
+  healthy running loop. In the shipped order the partial is an inert loop — the ACTIVE gate
+  exits, the statusline prints nothing. Any future decision that needs two writes must pick
+  its order the same way (locked by the `#21 order` test block).
 - **A turn whose done-claim sits in an EARLIER text entry is NEUTRAL** (audit F03): the
   last text entry still wins (locked v0.2.1 semantics — no teardown, no count), but such
   a turn no longer RESETS `stale_count` — pre-fix, an agent that habitually appended text
