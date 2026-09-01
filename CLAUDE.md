@@ -240,13 +240,19 @@ If you add a check, decide its failure direction first and write it in a comment
   Both counters (fast-path `TOTAL_LINES`, loop `WINDOW_ROWS`) use `grep -c ''` so they
   cannot drift apart again. Measured on 37.9MB/100k lines: `grep -c` 0.00s, `wc -l`
   0.04s, `awk END{NR}` 0.76s — the safe counter is also the fastest.
-- **Growth is bounded at half the file, because re-reads SUM.** R growth rounds parse the
-  sum of the windows, not the largest one. Unbounded, a shape needing two rounds measured
-  77% SLOWER than a plain full read (2000 + 16000 + 20002 lines parsed to answer a
-  20002-line question). If the next window would reach half the file, read the whole file
-  instead: worst case is one wasted window plus one full read, while the case the window
-  exists for — a boundary a few thousand lines back in a 100k-line transcript — still
-  stops small.
+- **Bound CUMULATIVE window work, not the last doubling.** R growth rounds parse the SUM
+  of the windows, so the waste is GEOMETRIC. The first attempt bounded only the final
+  doubling (`NEXT_WINDOW >= TOTAL_LINES/2`) and a second review refuted it: on a 256k-line
+  file the loop still burned 2000+16000+128000 wasted lines before the full read, +78%
+  wall-clock — the same magnitude as the regression the bound was meant to remove. The
+  live rule tracks `PARSED_LINES` and stops once parsed-so-far plus the next window would
+  exceed a QUARTER of the file, which caps the worst case at ~1.25x a plain full read
+  regardless of growth factor or boundary depth (256k deep-boundary: +78% → +9%). The
+  case the window exists for — a boundary a few thousand lines back in a 100k-line
+  transcript — stops at the first window and never reaches this bound.
+  **A wall-clock assertion in CI is a flake generator, so the test pins the ANSWER on a
+  deep-boundary transcript, not the timing.** The perf claim is measured by hand; if you
+  change the bound, re-measure rather than trusting the suite.
 - **Sentinel extraction reads the last TEXT-BEARING assistant entry of the current
   turn, not the last entry** (issue #18). The harness appends an entry per content
   block and per bookkeeping record, so a turn that claims done and then makes a tool

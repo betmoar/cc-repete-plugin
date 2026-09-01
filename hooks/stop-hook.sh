@@ -487,6 +487,7 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
       trap cleanup_turn_scan_tmp EXIT
       continue_scan=1
     fi
+    PARSED_LINES=0   # cumulative window lines already parsed — see the bound below
     while [[ "$continue_scan" == "1" ]]; do
       tail -n "$WINDOW_LINES" "$TRANSCRIPT" > "$TURN_SCAN_TMP" 2>/dev/null
       # `grep -c ''` counts LINES; `wc -l` counts NEWLINES. That difference was a
@@ -513,18 +514,21 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
         break
       fi
       # Growing re-reads from scratch, so R rounds cost the SUM of the windows,
-      # not the last one. Once a window is a large fraction of the file, another
-      # round costs more than just reading the file: the review measured a shape
-      # needing two rounds running 77% SLOWER than the plain full read (2000 +
-      # 16000 + 20002 parsed lines to answer a 20002-line question).
-      # So: if the next window would exceed HALF the file, read the whole file
-      # instead. Worst case is then one wasted window plus one full read (~1.2x
-      # a plain full read) instead of an unbounded 2-3x, while the case this
-      # optimization exists for — a boundary a few thousand lines back in a
-      # 100k-line transcript — still stops at the small window.
-      # TOTAL_LINES is the grep -c count from above (never wc -l).
+      # not the largest one — the waste is GEOMETRIC, not singular. Bounding only
+      # the final doubling (the first attempt at this) does not help: with growth
+      # 8 a 256k-line file still burned 2000+16000+128000 wasted lines before the
+      # full read (1.57x, measured +78% wall-clock — the same magnitude as the
+      # regression that bound was meant to remove).
+      # So bound the CUMULATIVE window work instead: once the windows parsed so
+      # far plus the next one would exceed a QUARTER of the file, stop guessing
+      # and read the file. Worst case is then ~1.25x a plain full read, whatever
+      # the growth factor or how deep the boundary sits, while the case the window
+      # exists for — a boundary a few thousand lines back in a 100k-line
+      # transcript — still stops at the first small window and never reaches here.
+      # TOTAL_LINES and WINDOW_ROWS are grep -c counts (never wc -l).
+      PARSED_LINES=$(( PARSED_LINES + WINDOW_ROWS ))
       NEXT_WINDOW=$(( WINDOW_LINES * WINDOW_GROWTH ))
-      if [[ -n "${TOTAL_LINES:-}" && "$NEXT_WINDOW" -ge $(( TOTAL_LINES / 2 )) ]]; then
+      if [[ -n "${TOTAL_LINES:-}" && $(( (PARSED_LINES + NEXT_WINDOW) * 4 )) -gt "$TOTAL_LINES" ]]; then
         TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
         break
       fi

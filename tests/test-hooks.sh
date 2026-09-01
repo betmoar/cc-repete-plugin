@@ -1043,6 +1043,34 @@ scaffold ""
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "window-scan: partial final line, sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
 
+echo "== window-scan: a DEEP boundary bounds cumulative work and still answers correctly =="
+# The second refutation: bounding only the LAST doubling leaves the waste
+# geometric (2000 + 16000 + 128000 wasted lines on a 256k file = +78% wall-clock
+# vs a plain full read, the same magnitude as the regression it was meant to
+# remove). The bound is now cumulative — parsed-so-far + next window > a quarter
+# of the file means read the file. This test pins the CORRECTNESS half (the
+# answer must equal the full read's); the perf half is measured, not tested,
+# because a wall-clock assertion in CI is a flake generator.
+# Boundary sits ~20k lines back, so the first window misses and the bound fires.
+scaffold ""
+{
+  for i in $(seq 1 20000); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'the real boundary'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 20000); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"b%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: deep boundary still tears down (== full-read answer)" \
+   'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: deep boundary emits no decision (teardown, not re-inject)" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
 echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
 scaffold ""
 mktx "did some work"
