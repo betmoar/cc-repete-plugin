@@ -501,7 +501,12 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
       TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
       continue_scan=0
     else
-      # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below.
+      # SC2329 (shellcheck >= 0.10) and SC2317 (older, e.g. Ubuntu apt in CI) are
+      # the same complaint under two codes: the function looks unreachable because
+      # it is only ever invoked indirectly, by the EXIT trap below. Both codes must
+      # be listed — CI runs an older shellcheck than a typical dev machine, so
+      # disabling only the newer code passes locally and fails in CI.
+      # shellcheck disable=SC2329,SC2317
       cleanup_turn_scan_tmp() { [[ -n "$TURN_SCAN_TMP" ]] && rm -f "$TURN_SCAN_TMP" 2>/dev/null; }
       trap cleanup_turn_scan_tmp EXIT
       continue_scan=1
