@@ -460,10 +460,17 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # initial window skips mktemp/tail entirely and reads TRANSCRIPT directly
   # (jq takes a filename argument, no copy either way) — the common case for
   # a fresh or short-lived loop, and the shape where the tmpfile machinery
-  # would otherwise be pure overhead over the pre-window behavior. wc -l on
+  # would otherwise be pure overhead over the pre-window behavior. Counting
   # the whole file is cheap relative to the jq parse that follows either way
   # (measured: single-digit ms vs jq's tens-of-ms-per-MB).
-  TOTAL_LINES="$(wc -l < "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
+  #
+  # `grep -c ''` NOT `wc -l`: wc counts NEWLINES, so a file whose last line has
+  # no trailing newline reads one short. Here that is merely conservative (a
+  # 2001-line file reads as 2000 and takes the full read), but the SAME
+  # undercount in the growth loop below was a real fail-closed bug — see there.
+  # Using one counter for both keeps them from drifting apart again. Measured
+  # on 37.9MB/100k lines: grep -c 0.00s, wc -l 0.04s, awk END{NR} 0.76s.
+  TOTAL_LINES="$(grep -c '' "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
   if [[ -n "${TOTAL_LINES:-}" && "$TOTAL_LINES" -le "$WINDOW_LINES" ]]; then
     # The file already fits in one window: read it directly, skip the loop.
     TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
@@ -482,7 +489,17 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
     fi
     while [[ "$continue_scan" == "1" ]]; do
       tail -n "$WINDOW_LINES" "$TRANSCRIPT" > "$TURN_SCAN_TMP" 2>/dev/null
-      WINDOW_ROWS="$(wc -l < "$TURN_SCAN_TMP" 2>/dev/null | tr -d ' ')"
+      # `grep -c ''` counts LINES; `wc -l` counts NEWLINES. That difference was a
+      # real fail-closed bug (found by the adversarial review of the first cut of
+      # this loop, reproduced): a transcript whose final line carries no trailing
+      # newline — the routine shape of a file being appended to right now, read
+      # between the line's bytes and its newline — makes `tail -n 2000` return
+      # 2000 whole lines but only 1999 newlines. The "fewer lines than requested
+      # => the window IS the file" test then fired one line early and STOPPED
+      # GROWING with the turn boundary still outside the window, so a real
+      # <repete-done> went invisible and the loop kept re-injecting past its own
+      # exit condition. Never count a window with wc -l.
+      WINDOW_ROWS="$(grep -c '' "$TURN_SCAN_TMP" 2>/dev/null | tr -d ' ')"
       SCAN_RESULT="$(jq -cRs "$TURN_SCAN_JQ" "$TURN_SCAN_TMP" 2>/dev/null || echo "")"
       TURN_SCAN="$SCAN_RESULT"
       FOUND_BOUNDARY="$(printf '%s' "$SCAN_RESULT" | jq -r '.found // false' 2>/dev/null || echo "false")"
@@ -495,7 +512,23 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
         # legitimate fresh-transcript case) — stop growing.
         break
       fi
-      WINDOW_LINES=$(( WINDOW_LINES * WINDOW_GROWTH ))
+      # Growing re-reads from scratch, so R rounds cost the SUM of the windows,
+      # not the last one. Once a window is a large fraction of the file, another
+      # round costs more than just reading the file: the review measured a shape
+      # needing two rounds running 77% SLOWER than the plain full read (2000 +
+      # 16000 + 20002 parsed lines to answer a 20002-line question).
+      # So: if the next window would exceed HALF the file, read the whole file
+      # instead. Worst case is then one wasted window plus one full read (~1.2x
+      # a plain full read) instead of an unbounded 2-3x, while the case this
+      # optimization exists for — a boundary a few thousand lines back in a
+      # 100k-line transcript — still stops at the small window.
+      # TOTAL_LINES is the grep -c count from above (never wc -l).
+      NEXT_WINDOW=$(( WINDOW_LINES * WINDOW_GROWTH ))
+      if [[ -n "${TOTAL_LINES:-}" && "$NEXT_WINDOW" -ge $(( TOTAL_LINES / 2 )) ]]; then
+        TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+        break
+      fi
+      WINDOW_LINES="$NEXT_WINDOW"
     done
   fi
   LAST_OUTPUT="$(printf '%s' "$TURN_SCAN" | jq -r '.l // ""' 2>/dev/null || echo "")"

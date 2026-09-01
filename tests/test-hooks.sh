@@ -998,6 +998,51 @@ mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atool)"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "window-scan: no-boundary transcript still sees the sentinel" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
 
+echo "== window-scan: a transcript with NO trailing newline still sees the sentinel =="
+# Found by adversarial review of the first cut and reproduced: `wc -l` counts
+# NEWLINES, so `tail -n 2000` on a file whose last line lacks a trailing newline
+# returns 2000 whole lines but only 1999 newlines. The loop's "fewer lines than
+# requested => the window IS the file" test then fired one line early and stopped
+# growing with the turn boundary STILL outside the window — a real <repete-done>
+# went invisible and the loop re-injected past its own exit condition
+# (fail-CLOSED, the forbidden direction). The counter is now `grep -c ''`.
+# This is the routine shape of a transcript being appended to right now: read
+# between a line's bytes and its newline.
+scaffold ""
+{
+  uprompt 'boundary'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 2100); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+# Strip the final newline: the whole point of the fixture.
+printf '%s' "$(cat "$TMP/t.jsonl")" > "$TMP/t.nonl.jsonl"
+mv "$TMP/t.nonl.jsonl" "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: no-trailing-newline sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: no-trailing-newline tears down (not a re-inject)" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
+echo "== window-scan: a PARTIAL final line (mid-write) does not hide the sentinel =="
+# Same counter bug, reached the realistic way: the harness is appending and the
+# hook reads while only part of the last line is on disk.
+scaffold ""
+{
+  uprompt 'boundary'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 2100); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  printf '{"message":{"role":"assis'
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: partial final line, sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
 echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
 scaffold ""
 mktx "did some work"

@@ -229,6 +229,24 @@ If you add a check, decide its failure direction first and write it in a comment
   — and therefore `.l`/`.a` — is identical to a full read's. Terminal condition is `tail`
   returning fewer lines than requested (the window IS the file), which also covers the
   legitimate no-boundary-anywhere case where `-1` is correct.
+- **Count window lines with `grep -c ''`, NEVER `wc -l`** (issue #9 review, reproduced).
+  `wc -l` counts NEWLINES. A transcript whose last line has no trailing newline — the
+  routine shape of a file being appended to right now, read between a line's bytes and
+  its newline — makes `tail -n 2000` return 2000 whole lines but only 1999 newlines. The
+  growth loop's "fewer lines than requested ⇒ the window IS the file" test then fires one
+  line early and stops growing with the turn boundary still outside the window: a real
+  `<repete-done>` goes invisible and the loop re-injects past its own exit condition.
+  Fail-closed, the forbidden direction, and the full suite was green while it was live.
+  Both counters (fast-path `TOTAL_LINES`, loop `WINDOW_ROWS`) use `grep -c ''` so they
+  cannot drift apart again. Measured on 37.9MB/100k lines: `grep -c` 0.00s, `wc -l`
+  0.04s, `awk END{NR}` 0.76s — the safe counter is also the fastest.
+- **Growth is bounded at half the file, because re-reads SUM.** R growth rounds parse the
+  sum of the windows, not the largest one. Unbounded, a shape needing two rounds measured
+  77% SLOWER than a plain full read (2000 + 16000 + 20002 lines parsed to answer a
+  20002-line question). If the next window would reach half the file, read the whole file
+  instead: worst case is one wasted window plus one full read, while the case the window
+  exists for — a boundary a few thousand lines back in a 100k-line transcript — still
+  stops small.
 - **Sentinel extraction reads the last TEXT-BEARING assistant entry of the current
   turn, not the last entry** (issue #18). The harness appends an entry per content
   block and per bookkeeping record, so a turn that claims done and then makes a tool
@@ -305,10 +323,11 @@ If you add a check, decide its failure direction first and write it in a comment
 5. **~~Per-Stop transcript cost is O(whole transcript)~~ — SHIPPED (issue #9).** The scan
    now grows a `tail -n` window until it contains a turn boundary; see the landmine on the
    boundary predicate. Measured end-to-end, old vs new, same machine: 33.6MB/13.7k lines
-   0.53s/201MB → 0.25s/34MB; 37.9MB/100k lines 0.88s/361MB → 0.19s/10MB; 27.1MB/1.7k fat
-   lines 0.40s/139MB → 0.42s/139MB (that shape fits the initial window, so it takes the
-   direct-read fast path and pays one extra `wc -l` ≈ 30ms — an accepted, measured
-   regression on the one shape where there is nothing to window). Note the issue's cited
+   0.50s → 0.21s; 37.9MB/100k lines 0.85s → 0.14s; 27.1MB/1.7k fat lines 0.39s → 0.40s
+   (fits the initial window, so it takes the direct-read fast path and pays one extra
+   line count — an accepted regression on the one shape with nothing to window);
+   20k-line two-growth shape 0.29s → 0.34s (bounded by the half-file rule below; it was
+   0.50s / +77% before that bound). Note the issue's cited
    ~2.8s never reproduced here; RSS did. Residue: the `fm()` fork count (~60/Stop) is real
    but millisecond-scale — batch opportunistically, never urgently.
 6. **Sentinel visibility across a multi-entry turn — open design question** (2026-08-31

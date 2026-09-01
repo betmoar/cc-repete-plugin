@@ -5,7 +5,7 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 ## [Unreleased]
 
 ### Changed
-- **The Stop hook no longer re-parses the whole transcript on every Stop.** It grows a `tail -n` window until the window contains a turn boundary, which — because the window is always a suffix of the file — provably yields the same turn slice a full read would, so the sentinel decision is unchanged. Measured end-to-end on this machine: 33.6MB/13.7k lines 0.53s/201MB → 0.25s/34MB; 37.9MB/100k lines 0.88s/361MB → 0.19s/10MB. A transcript that already fits the initial window takes a direct-read fast path and pays one extra `wc -l` (~30ms) — the one measured regression, accepted because there is nothing to window there (issue #9).
+- **The Stop hook no longer re-parses the whole transcript on every Stop.** It grows a `tail -n` window until the window contains a turn boundary, which — because the window is always a suffix of the file — provably yields the same turn slice a full read would, so the sentinel decision is unchanged. Measured end-to-end on this machine: 33.6MB/13.7k lines 0.50s → 0.21s; 37.9MB/100k lines 0.85s → 0.14s. A transcript that already fits the initial window takes a direct-read fast path and pays one extra line count — the one accepted regression (0.39s → 0.40s), because there is nothing to window there. Growth is bounded at half the file: re-reads sum, so an unbounded grow ran 77% slower than a plain full read on a two-round shape; bounded it is 0.29s → 0.34s (issue #9).
 
 ## [0.2.3] — 2026-09-01
 
