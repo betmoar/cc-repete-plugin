@@ -131,6 +131,8 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
 | `hooks/promote.sh` keys or behavior | `commands/repete-continue.md` step 4 invocation, `tests/test-promote.sh`, and the frontmatter-schema row above (promote writes 6 of those keys) | test: `tests/test-promote.sh` |
 | A new test suite file under `tests/` | `tests/run-all.sh` AND `.github/workflows/ci.yml` AND `.github/workflows/release.yml` — three sites, all by hand | not enforced — a suite missing from CI passes locally and never runs on a tag |
+| The scan jq program (`TURN_SCAN_JQ`) | Nothing — it is defined ONCE and reused by all three paths (fast path, mktemp-failure fallback, growth loop). It was three verbatim copies; if you ever re-inline it, the paths can silently disagree | tests: window-scan blocks + the `#18` blocks |
+| Window sizing (`WINDOW_LINES`, `WINDOW_GROWTH`) | Nothing mechanical — but the initial size must stay comfortably above the documented 500-sidechain hazard, and the growth predicate must stay "contains a turn boundary" (see landmine) | tests: window-scan blocks |
 | Transcript scan shape (`$turn_start`, text-bearing pick) | The #18 test block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, `tool_result`+text mixed, sidechain | tests: `#18` blocks |
 | `.repete/.warned-nojq` marker path | Hook no-jq branch + the warning text that names it for deletion | tests: `#7` blocks |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
@@ -214,6 +216,19 @@ If you add a check, decide its failure direction first and write it in a comment
   `#`-leading line instead would misclassify real content like "# TODO finish parser".
 - **Body extraction prints-before-increment (I1)** so a `---` horizontal rule inside
   the loop body is preserved, not swallowed.
+- **The window grows on "contains a turn boundary", NOT on "found assistant text"**
+  (issue #9). The issue's own acceptance text proposed the text predicate; it is wrong two
+  ways. A tool-only turn legitimately has no assistant text, so that predicate forces a
+  full read every Stop — safe but pointless. Far worse: a window can contain assistant
+  text while missing the boundary that bounds it, and `$turn_start` then falls back to
+  `-1`, meaning "scan this whole window" — so the scan reads across into the PREVIOUS turn
+  and can re-fire a spent sentinel (re-pausing at an already-approved checkpoint). That is
+  fail-closed, reached from a different door than the bug #9 set out to avoid. The
+  boundary predicate is safe because the window is always a `tail -n` SUFFIX: a suffix
+  containing any boundary necessarily contains the LAST one in the file, so the turn slice
+  — and therefore `.l`/`.a` — is identical to a full read's. Terminal condition is `tail`
+  returning fewer lines than requested (the window IS the file), which also covers the
+  legitimate no-boundary-anywhere case where `-1` is correct.
 - **Sentinel extraction reads the last TEXT-BEARING assistant entry of the current
   turn, not the last entry** (issue #18). The harness appends an entry per content
   block and per bookkeeping record, so a turn that claims done and then makes a tool
@@ -287,16 +302,15 @@ If you add a check, decide its failure direction first and write it in a comment
    loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
 4. **v2/v3 roadmap** (README): phased missions; global lesson store with
    recurrence-gated promotion. The state model was designed to extend to both.
-5. **Per-Stop transcript cost is O(whole transcript)** (audit F13, measured 342MB RSS /
-   ~2.8s per Stop on a 32MB transcript, re-paid every iteration). A naive tail-bound is
-   UNSAFE (500 trailing sidechain lines can hide the last main-thread sentinel —
-   fail-closed); the fix needs a grow-the-window scan that falls back to a full read
-   when the window comes up sentinel-blind. Own engagement; don't bolt onto another fix.
-   The fm() fork count (~60/Stop) is real but millisecond-scale — batch opportunistically,
-   never urgently. **Note:** v0.2.1's turn-bounded scan is still a full read — it
-   changed WHICH entry is chosen, not how much is parsed. The grow-the-window fix must
-   preserve the turn boundary, so its window has to reach back past the last user entry,
-   not just past the last assistant text.
+5. **~~Per-Stop transcript cost is O(whole transcript)~~ — SHIPPED (issue #9).** The scan
+   now grows a `tail -n` window until it contains a turn boundary; see the landmine on the
+   boundary predicate. Measured end-to-end, old vs new, same machine: 33.6MB/13.7k lines
+   0.53s/201MB → 0.25s/34MB; 37.9MB/100k lines 0.88s/361MB → 0.19s/10MB; 27.1MB/1.7k fat
+   lines 0.40s/139MB → 0.42s/139MB (that shape fits the initial window, so it takes the
+   direct-read fast path and pays one extra `wc -l` ≈ 30ms — an accepted, measured
+   regression on the one shape where there is nothing to window). Note the issue's cited
+   ~2.8s never reproduced here; RSS did. Residue: the `fm()` fork count (~60/Stop) is real
+   but millisecond-scale — batch opportunistically, never urgently.
 6. **Sentinel visibility across a multi-entry turn — open design question** (2026-08-31
    audit F03 residue): a done-claim in an EARLIER text entry of the turn is neutral
    since v0.2.2 (no teardown, no count, no longer a counter reset), but it is still

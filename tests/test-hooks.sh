@@ -938,6 +938,66 @@ mkrows "$(atext 'main thread work')" \
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "#18: sidechain done still ignored" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
 
+# ---------------------------------------------------------------------------
+# Grow-the-window scan (audit F13): the transcript parse now grows a `tail -n`
+# window instead of always reading the whole file. These lock the same
+# guarantees the #18 blocks above lock, specifically reproduced with enough
+# trailing rows to force the window to actually be smaller than the file, so
+# a regression to "always the full file" would still pass these but a
+# regression to a truly fixed-size tail-bound would not.
+# ---------------------------------------------------------------------------
+
+echo "== window-scan: 500 trailing sidechain rows still let the sentinel through =="
+# The documented hazard case (audit F13): a done-claim followed by 500
+# sidechain rows (a subagent dispatch after the real answer). A fixed-size
+# tail bound would risk the boundary sliding out of a too-small window; the
+# grow-the-window scan must still see it.
+scaffold ""
+{
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 500); do
+    printf '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"sidechain %d"}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: 500-trailing-sidechain sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== window-scan: a spent sentinel from a PREVIOUS turn is still not re-fired =="
+# This is the fail-closed regression the issue's original "grew until text
+# found" predicate would have caused: a window that contains assistant text
+# but NOT the turn boundary that bounds it would wrongly reach back across
+# turns. Pad past the initial window size so growth is actually exercised.
+scaffold ""
+{
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  uprompt 'keep going'
+  echo
+  for i in $(seq 1 2500); do
+    printf '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"filler %d"}]}}\n' "$i"
+  done
+  atool
+  echo
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: previous-turn done not re-fired after growth" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "window-scan: still re-injects" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== window-scan: a tool-only turn (no assistant text) never blocks Stop or blinds detection =="
+scaffold ""
+mkrows "$(uprompt 'go')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: tool-only turn re-injects (no crash, no false teardown)" \
+   'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+ck "window-scan: tool-only turn leaves loop active" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+
+echo "== window-scan: no user boundary anywhere still finds the sentinel (fresh transcript) =="
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: no-boundary transcript still sees the sentinel" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
 echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
 scaffold ""
 mktx "did some work"

@@ -377,7 +377,66 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # from "a turn whose sentinel sits in an earlier entry" — the stale-counter
   # reset below must not fire on the latter (2026-08-31 audit F03). Emitted as one JSON
   # object so the transcript is still parsed exactly once per Stop.
-  TURN_SCAN="$(jq -cRs '
+  #
+  # GROW-THE-WINDOW (audit F13): re-parsing the WHOLE transcript on every Stop is
+  # O(transcript) work paid every iteration — superlinear over a loop's lifetime,
+  # worst exactly in the long-loop case this plugin exists for. A naive tail-bound
+  # is UNSAFE: 500 trailing sidechain lines (a subagent dispatch after the real
+  # done-claim) can sit between the window's start and the turn boundary, so a
+  # fixed-size tail would silently scan into the WRONG turn — fail-closed, the one
+  # forbidden direction (a done-claim goes invisible, or a spent sentinel from the
+  # previous turn re-fires).
+  #
+  # The predicate that makes growing safe is NOT "found assistant text" (the
+  # issue's original phrasing) — that is wrong two ways: (a) a legitimate
+  # tool-only turn has no assistant text and would force a full read every Stop,
+  # safe but pointless; (b) far worse, a window can CONTAIN assistant text while
+  # missing the turn boundary that bounds it — the jq program's $turn_start then
+  # falls back to -1 ("no boundary in this window") and silently scans across
+  # into the PREVIOUS turn, which can re-fire a spent sentinel. That is exactly
+  # the fail-closed trap this fix exists to avoid, just reached from a different
+  # angle.
+  #
+  # The correct predicate: grow the window until it contains AT LEAST ONE
+  # main-thread, non-tool_result, role:user row (a turn boundary), using the
+  # SAME boundary test the full-read program already uses. Proof of safety: the
+  # window is always a trailing SUFFIX of the file (built with `tail -n`, which
+  # only ever returns whole lines — no partial first line, so nothing to drop).
+  # A suffix that contains at least one boundary contains, by construction, the
+  # LAST boundary in the whole file (nothing after the suffix's start could
+  # contain an earlier-in-file boundary that ranks after this one — the suffix
+  # already runs to EOF). So the turn slice computed from the window is
+  # identical to the one the full read would compute, and therefore .l and .a
+  # are byte-identical too. Growing never changes WHICH entry is chosen, only
+  # how much is parsed to find it.
+  #
+  # Terminal fallback: once `tail -n N` returns FEWER than N lines, the window
+  # already IS the whole file — further growth is impossible, so its result is
+  # used as-is even with zero boundaries found. That covers the one case where
+  # $turn_start legitimately stays -1: a fresh transcript with no user row at
+  # all, which must fall back to "scan everything" (the pre-existing, correct
+  # full-read scope), not loop forever.
+  WINDOW_LINES=2000   # covers the documented hazard (500 sidechain lines) with
+                       # margin; most turns are far smaller, so this is a single
+                       # pass in the common case.
+  WINDOW_GROWTH=8      # aggressive growth so the rare oversized-turn case
+                       # converges in one or two re-reads instead of many.
+  # The window is written to a TEMP FILE, not captured into a bash variable:
+  # measured on a real 27MB/1.7k-line transcript (fat lines), `W="$(tail ...)"`
+  # cost ~0.5s of pure bash string-copy overhead even though the window itself
+  # is small — command substitution buffers the whole thing through bash's
+  # internal read loop. Feeding jq a file avoids that copy entirely and is
+  # what makes the small-window case actually fast (jq -cRs takes a filename
+  # argument directly, so no second `cat`/pipe copy either).
+  # The scan program, defined ONCE. It was three verbatim copies (fast path,
+  # mktemp-failure fallback, growth loop) with nothing enforcing they stay in
+  # sync — a future change to the turn-boundary or text-extraction rules had to
+  # land in three places or the paths would silently disagree, which is exactly
+  # the class of bug the #18 work existed to fix. `.found` is emitted on every
+  # path; only the growth loop reads it, and an ignored key costs nothing.
+  # shellcheck disable=SC2016  # $rows/$turn_start/$texts are jq variables — the
+  # single quotes are what keep the shell from expanding them, as intended.
+  TURN_SCAN_JQ='
       [ split("\n")[] | fromjson? | objects ] as $rows
       | ( [ $rows | to_entries[]
             | select(.value.isSidechain != true)
@@ -395,8 +454,50 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
             then ([ .[] | objects | select(.type=="text") | .text | strings ] | join("\n"))
             else tostring end
           | select(test("\\S")) ] as $texts
-      | {l: ($texts | last // ""), a: ($texts | join("\n"))}
-    ' "$TRANSCRIPT" 2>/dev/null || echo "")"
+      | {found: ($turn_start != -1), l: ($texts | last // ""), a: ($texts | join("\n"))}'
+  TURN_SCAN=""
+  # Whole-file line count, so a transcript that already fits inside the
+  # initial window skips mktemp/tail entirely and reads TRANSCRIPT directly
+  # (jq takes a filename argument, no copy either way) — the common case for
+  # a fresh or short-lived loop, and the shape where the tmpfile machinery
+  # would otherwise be pure overhead over the pre-window behavior. wc -l on
+  # the whole file is cheap relative to the jq parse that follows either way
+  # (measured: single-digit ms vs jq's tens-of-ms-per-MB).
+  TOTAL_LINES="$(wc -l < "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
+  if [[ -n "${TOTAL_LINES:-}" && "$TOTAL_LINES" -le "$WINDOW_LINES" ]]; then
+    # The file already fits in one window: read it directly, skip the loop.
+    TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+  else
+    TURN_SCAN_TMP="$(mktemp "${TMPDIR:-/tmp}/repete-window.XXXXXX" 2>/dev/null || echo "")"
+    if [[ -z "$TURN_SCAN_TMP" ]]; then
+      # mktemp failed (read-only /tmp, exotic sandbox): fall back to the
+      # pre-window full read rather than losing sentinel visibility.
+      TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+      continue_scan=0
+    else
+      # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below.
+      cleanup_turn_scan_tmp() { [[ -n "$TURN_SCAN_TMP" ]] && rm -f "$TURN_SCAN_TMP" 2>/dev/null; }
+      trap cleanup_turn_scan_tmp EXIT
+      continue_scan=1
+    fi
+    while [[ "$continue_scan" == "1" ]]; do
+      tail -n "$WINDOW_LINES" "$TRANSCRIPT" > "$TURN_SCAN_TMP" 2>/dev/null
+      WINDOW_ROWS="$(wc -l < "$TURN_SCAN_TMP" 2>/dev/null | tr -d ' ')"
+      SCAN_RESULT="$(jq -cRs "$TURN_SCAN_JQ" "$TURN_SCAN_TMP" 2>/dev/null || echo "")"
+      TURN_SCAN="$SCAN_RESULT"
+      FOUND_BOUNDARY="$(printf '%s' "$SCAN_RESULT" | jq -r '.found // false' 2>/dev/null || echo "false")"
+      if [[ "$FOUND_BOUNDARY" == "true" ]]; then
+        break
+      fi
+      if [[ -z "${WINDOW_ROWS:-}" || "$WINDOW_ROWS" -lt "$WINDOW_LINES" ]]; then
+        # tail returned fewer lines than requested: we already read the whole
+        # file. This IS the full-read result (no boundary anywhere is the
+        # legitimate fresh-transcript case) — stop growing.
+        break
+      fi
+      WINDOW_LINES=$(( WINDOW_LINES * WINDOW_GROWTH ))
+    done
+  fi
   LAST_OUTPUT="$(printf '%s' "$TURN_SCAN" | jq -r '.l // ""' 2>/dev/null || echo "")"
   TURN_TEXT_ALL="$(printf '%s' "$TURN_SCAN" | jq -r '.a // ""' 2>/dev/null || echo "")"
 fi
