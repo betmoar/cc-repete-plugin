@@ -22,6 +22,7 @@ jq -e . "$ROOT/.claude-plugin/plugin.json" "$ROOT/.claude-plugin/statusline.json
 
 bash "$ROOT/tests/test-hooks.sh" || rc=1
 bash "$ROOT/tests/test-statusline.sh" || rc=1
+bash "$ROOT/tests/test-promote.sh" || rc=1
 
 if command -v node >/dev/null 2>&1; then
   echo "== release gate (scripts/release-gate.mjs) =="

@@ -1,5 +1,9 @@
 # Spec: stale detection — false done-claim feedback + `paused-stale` yield
 
+> **Design record — may lag the code. `hooks/stop-hook.sh` is authoritative.** This file
+> records what was approved and why, not what ships today. Refinements are appended as
+> `> Refined in vX.Y.Z` notes pointing at the live logic; the original text is left standing.
+
 Status: approved design (brainstorm `wf_6b69cf34-90a`, operator interview 2026-08-16).
 Source: Gauntlet-loop engineering ideas (Prompt Index guide), filtered through this
 repo's fail-open rule and couplings table.
@@ -79,6 +83,15 @@ fi
 > could never trip `paused-stale`. Only a genuinely sentinel-free turn resets. Live
 > logic: the `TURN_HAS_DONE` probe in `hooks/stop-hook.sh`'s done-check else-branch.
 
+> **Refined in v0.2.3** (issue #21): every bare `set_fm` in the snippet above is now
+> `set_fm_or_warn`. The snippet's writes discarded their return value, so on an
+> unwritable `.repete/` the hook emitted the `paused-stale` yield (or the rejection
+> note) while state stayed `running` and `stale_count` stayed 0 — meaning `stale_limit`
+> could never be reached and this whole mechanism was silently inert. The guard emits a
+> could-not-save warning instead of the claimed outcome, sets no `decision`, and exits 0.
+> The failure direction described above is unchanged: never tears down, never blocks.
+> Live logic: `set_fm_or_warn` in `hooks/stop-hook.sh`.
+
 `STALE_NOTE` (when set) is prepended to the re-inject assembly after the body and
 before the lesson catalog — it is per-turn feedback, not durable state, and carries
 no lesson-card bodies (metadata-only rule untouched).
@@ -99,6 +112,12 @@ a subsequent Stop in that state exits 0 without re-injecting.
 raise `stale_limit`, fix `mission_goal`, or `/repete-cancel`.
 
 ## Prompt-code changes (coupling tax — all four sites for a new status)
+
+> Refined in v0.2.3: the two bundled skills were consolidated into a single
+> `skills/repete-loops/`. The row below naming `skills/running-repete-loops/SKILL.md` now
+> maps to that skill's §4 "Reading the yields" (`paused-stale`) and §6 "Debugging" (the
+> done-claim-ignored symptom). The coupling itself is unchanged — a status still costs a
+> skill edit; only the path moved.
 
 | Site | Change |
 | --- | --- |

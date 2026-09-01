@@ -2,6 +2,22 @@
 
 All notable changes to cc-repete are recorded here. Versions follow [semver](https://semver.org/); `.claude-plugin/plugin.json` is the single source of truth. A release is cut by pushing a `v<x.y.z>` tag — the release workflow gates `tag == plugin.json == newest CHANGELOG heading` and publishes the CHANGELOG section as the release body.
 
+## [Unreleased]
+
+### Changed
+- **The Stop hook no longer re-parses the whole transcript on every Stop.** It grows a `tail -n` window until the window contains a turn boundary, which — because the window is always a suffix of the file — provably yields the same turn slice a full read would, so the sentinel decision is unchanged. Measured end-to-end on this machine: 33.6MB/13.7k lines 0.50s → 0.21s; 37.9MB/100k lines 0.85s → 0.14s. A transcript that already fits the initial window takes a direct-read fast path and pays one extra line count — the one accepted regression (0.39s → 0.40s), because there is nothing to window there. Every support command the scan depends on (`tail`, the line count, `mktemp`) falls back to a full read on failure, and counts are validated numerically — a failing count is not the same fact as a short window, and reading it as one hid a real done-claim in review. Growth re-reads from scratch, so the wasted work is geometric: the bound tracks cumulative parsed lines and reads the whole file once they would exceed a quarter of it, and transcripts under four windows are read directly (below that, windowing cannot pay for itself). Together those cap the worst case at 1.25x a full read at every file size. A 256k-line deep-boundary transcript went 2.16s → 2.33s (+9%); an earlier bound that only capped the last doubling left that shape at +78% (issue #9).
+
+## [0.2.3] — 2026-09-01
+
+### Fixed
+- **A pause or teardown the hook decided could be reported without ever being saved.** With `.repete/` unwritable, `set_fm`'s failure was discarded by every call site except the two blocking ones: the hook printed "✅ mission goal met — loop complete" while state on disk still read `active: true / status: running`, and a later Stop in the same session then hijacked an unrelated turn with a re-inject. The same shape hit every `paused-*` status and both `stale_count` writes — and because the count never persisted, `stale_limit` could never be reached, silently defanging the false-done-claim safety net. Reproduced on v0.2.1 and v0.2.2. `set_fm_or_warn` now guards every write whose message promises persistence: on failure it names the write problem instead of claiming the outcome, sets no `decision`, and exits 0. Still fail-open — no new blocking path (issue #21). The teardown's two writes are ordered `active: false` before `status: done`: `set_fm_or_warn` exits on the first failure, so the only reachable partial is "first write landed, second did not", and with `status` first that partial reads `done` + `active: true` — which the hook treats as finished but the statusline and `/repete-status` render as a healthy running loop. Written in this order the same partial degrades to an inert loop instead (Copilot review, PR #26).
+- **Release notes truncated at a `[LABEL]: text` changelog callout.** v0.2.2 narrowed `extractSection`'s stop pattern to the reference shape `[label]: `, which still matches an ordinary body line like `[BREAKING]: config format changed` — dropping it and every line after it from the published release body, with the gate reporting OK. The stop now requires a real URL (`[label]: scheme://…`), choosing the cheap failure direction: keeping one extra body line beats silently losing content (issue #22).
+
+### Added
+- **`hooks/promote.sh`** — checkpoint promotion is mechanical instead of prompt-code. `/repete-continue` step 4 used to instruct the agent to hand-edit six frontmatter keys, where a single miss silently killed or miscounted the resumed loop; it now shells out to one atomic awk pass. Unlike the Stop hook, promote.sh fails LOUD — it is human-gated, so a silent partial write is the defect, not the safe direction. Covered by a new `tests/test-promote.sh` (43 assertions), wired into run-all.sh, CI, and the release workflow (issue #8).
+- **`promote.sh` de-BOMs the state file before reading it.** A UTF-8 BOM glues to the opening `---`, so the phase read came back empty *and* the writer's frontmatter block never opened — all six keys would have landed in the wrong scope. Same trap v0.2.2 fixed in the hook. If the BOM cannot be stripped (unwritable file, no perl), promote.sh refuses and names the BOM rather than writing into a file it knows is mis-scoped.
+- **`docs/spec/*` is now in the couplings table**, and step 4 of "How to change the hook safely" names it — the gap that let a spec file describe superseded behavior as current. Each spec file carries a header stating it is a design record that may lag the code, with the hook authoritative; refinements are appended as notes rather than rewriting the record (issue #23).
+
 ## [0.2.2] — 2026-08-31
 
 ### Fixed
@@ -54,7 +70,8 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 ### Changed
 - **Docs hardened to match the code.** The couplings table gained rows (stale keys, gauntlet keys, statusline markers, sentinel spellings) and the landmine list grew (STALE_NOTE init-outside-guard, fm() first-key trap, GAUNTLET_FALLBACK mirror). Release notes, specs, README, skills, and commands were swept for drift by three review rounds; a doc-lock test block now enforces the mechanical half of the couplings table, and a golden-SHA test locks the default re-inject byte-for-byte.
 
-[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/betmoar/cc-repete-plugin/compare/v0.1.4...v0.2.0

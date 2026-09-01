@@ -638,11 +638,24 @@ done
 # sentinel spellings — mirror the ACTUAL contract: <repete-done> lives in the frozen
 # protocol core; <repete-checkpoint> is deliberately NOT in protocol.md (the frozen core
 # stays quiet in autonomous mode — the rule rides RULES_EXTRA). Both must appear in the
-# hook and README; each must appear in at least the running skill + one command.
-ck "doc-lock: <repete-done> in protocol + hook + README + running skill + a command" \
-   'grep -q "<repete-done>" "$ROOT/templates/protocol.md" && grep -q "<repete-done>" "$H" && grep -q "<repete-done>" "$ROOT/README.md" && grep -q "<repete-done>" "$ROOT/skills/running-repete-loops/SKILL.md" && grep -q "<repete-done>" "$ROOT/commands/repete.md"'
-ck "doc-lock: <repete-checkpoint> in hook + README + running skill + repete-continue" \
-   'grep -q "<repete-checkpoint>" "$H" && grep -q "<repete-checkpoint>" "$ROOT/README.md" && grep -q "<repete-checkpoint>" "$ROOT/skills/running-repete-loops/SKILL.md" && grep -q "<repete-checkpoint>" "$ROOT/commands/repete-continue.md"'
+# hook and README; each must appear in the skill + one command.
+ck "doc-lock: <repete-done> in protocol + hook + README + skill + a command" \
+   'grep -q "<repete-done>" "$ROOT/templates/protocol.md" && grep -q "<repete-done>" "$H" && grep -q "<repete-done>" "$ROOT/README.md" && grep -q "<repete-done>" "$ROOT/skills/repete-loops/SKILL.md" && grep -q "<repete-done>" "$ROOT/commands/repete.md"'
+ck "doc-lock: <repete-checkpoint> in hook + README + skill + repete-continue" \
+   'grep -q "<repete-checkpoint>" "$H" && grep -q "<repete-checkpoint>" "$ROOT/README.md" && grep -q "<repete-checkpoint>" "$ROOT/skills/repete-loops/SKILL.md" && grep -q "<repete-checkpoint>" "$ROOT/commands/repete-continue.md"'
+# The plugin ships exactly ONE skill. Two overlapping skills competed for the same
+# triggers (both fired on "autonomous loop"/"context rot"), so Claude consulted one and
+# silently missed the other half of the answer — and a plugin's skill descriptions sit in
+# context permanently, so the cost was paid on every session. If a second skill is ever
+# added, it must earn a genuinely disjoint trigger surface, not re-split this one by topic.
+ck "doc-lock: exactly one skill ships" \
+   '[ "$(find "$ROOT/skills" -name SKILL.md | wc -l | tr -d " ")" -eq 1 ]'
+# Reference files are the skill's second disclosure level: SKILL.md names them, so a
+# rename that misses one leaves a dangling pointer the model follows into nothing.
+for ref in context-rot gauntlet; do
+  ck "doc-lock: references/$ref.md exists and is pointed at from SKILL.md" \
+     "test -f \"\$ROOT/skills/repete-loops/references/$ref.md\" && grep -q 'references/$ref.md' \"\$ROOT/skills/repete-loops/SKILL.md\""
+done
 # frontmatter keys the docs promise
 for key in stale_count stale_limit gauntlet reference bar max_iterations context_budget_lines mission_goal; do
   ck "doc-lock: '$key' in template frontmatter + /repete scaffold prose + /repete-status" \
@@ -938,6 +951,266 @@ mkrows "$(atext 'main thread work')" \
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "#18: sidechain done still ignored" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
 
+# ---------------------------------------------------------------------------
+# Grow-the-window scan (audit F13): the transcript parse now grows a `tail -n`
+# window instead of always reading the whole file. These lock the same
+# guarantees the #18 blocks above lock, specifically reproduced with enough
+# trailing rows to force the window to actually be smaller than the file, so
+# a regression to "always the full file" would still pass these but a
+# regression to a truly fixed-size tail-bound would not.
+# ---------------------------------------------------------------------------
+
+echo "== window-scan: 500 trailing sidechain rows still let the sentinel through =="
+# The documented hazard case (audit F13): a done-claim followed by 500
+# sidechain rows (a subagent dispatch after the real answer). A fixed-size
+# tail bound would risk the boundary sliding out of a too-small window; the
+# grow-the-window scan must still see it.
+scaffold ""
+{
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 500); do
+    printf '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"sidechain %d"}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: 500-trailing-sidechain sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== window-scan: a spent sentinel from a PREVIOUS turn is still not re-fired =="
+# This is the fail-closed regression the issue's original "grew until text
+# found" predicate would have caused: a window that contains assistant text
+# but NOT the turn boundary that bounds it would wrongly reach back across
+# turns. Pad past the initial window size so growth is actually exercised.
+scaffold ""
+{
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  uprompt 'keep going'
+  echo
+  for i in $(seq 1 2500); do
+    printf '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"filler %d"}]}}\n' "$i"
+  done
+  atool
+  echo
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: previous-turn done not re-fired after growth" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "window-scan: still re-injects" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== window-scan: a tool-only turn (no assistant text) never blocks Stop or blinds detection =="
+scaffold ""
+mkrows "$(uprompt 'go')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: tool-only turn re-injects (no crash, no false teardown)" \
+   'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+ck "window-scan: tool-only turn leaves loop active" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+
+echo "== window-scan: no user boundary anywhere still finds the sentinel (fresh transcript) =="
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: no-boundary transcript still sees the sentinel" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== window-scan: a transcript with NO trailing newline still sees the sentinel =="
+# Found by adversarial review of the first cut and reproduced: `wc -l` counts
+# NEWLINES, so `tail -n 2000` on a file whose last line lacks a trailing newline
+# returns 2000 whole lines but only 1999 newlines. The loop's "fewer lines than
+# requested => the window IS the file" test then fired one line early and stopped
+# growing with the turn boundary STILL outside the window — a real <repete-done>
+# went invisible and the loop re-injected past its own exit condition
+# (fail-CLOSED, the forbidden direction). The counter is now `grep -c ''`.
+# This is the routine shape of a transcript being appended to right now: read
+# between a line's bytes and its newline.
+scaffold ""
+{
+  uprompt 'boundary'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 2100); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+# Strip the final newline: the whole point of the fixture.
+printf '%s' "$(cat "$TMP/t.jsonl")" > "$TMP/t.nonl.jsonl"
+mv "$TMP/t.nonl.jsonl" "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: no-trailing-newline sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: no-trailing-newline tears down (not a re-inject)" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
+echo "== window-scan: a PARTIAL final line (mid-write) does not hide the sentinel =="
+# Same counter bug, reached the realistic way: the harness is appending and the
+# hook reads while only part of the last line is on disk.
+scaffold ""
+{
+  uprompt 'boundary'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 2100); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"t%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  printf '{"message":{"role":"assis'
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: partial final line, sentinel still seen" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+
+echo "== window-scan: a DEEP boundary bounds cumulative work and still answers correctly =="
+# The second refutation: bounding only the LAST doubling leaves the waste
+# geometric (2000 + 16000 + 128000 wasted lines on a 256k file = +78% wall-clock
+# vs a plain full read, the same magnitude as the regression it was meant to
+# remove). The bound is now cumulative — parsed-so-far + next window > a quarter
+# of the file means read the file. This test pins the CORRECTNESS half (the
+# answer must equal the full read's); the perf half is measured, not tested,
+# because a wall-clock assertion in CI is a flake generator.
+# Boundary sits ~20k lines back, so the first window misses and the bound fires.
+scaffold ""
+{
+  for i in $(seq 1 20000); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'the real boundary'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 20000); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"b%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: deep boundary still tears down (== full-read answer)" \
+   'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: deep boundary emits no decision (teardown, not re-inject)" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
+echo "== window-scan: a FAILING tail falls back to the full read (no lost sentinel) =="
+# The windowed scan introduced a dependency the pre-window hook did not have:
+# if `tail` fails (ENOSPC writing the tmpfile, a broken PATH, a mid-loop
+# permission change) the tmpfile is empty, the scan finds no sentinel, and a
+# real <repete-done> the OLD code saw goes invisible — fail-CLOSED. Reproduced
+# with a tail shim exiting 1: old hook tore down, windowed hook re-injected.
+# A shim on PATH is the only way to make tail fail deterministically here.
+scaffold ""
+{
+  uprompt 'go'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 3000); do
+    printf '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"noise %d"}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+mkdir -p "$TMP/failbin"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/failbin/tail"
+chmod +x "$TMP/failbin/tail"
+OUT="$(PATH="$TMP/failbin:$PATH" run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: failing tail still sees the sentinel (falls back to full read)" \
+   'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: failing tail tears down, does not re-inject" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
+echo "== window-scan: the early exit actually fires (window used, full file NOT re-read) =="
+# The whole point of the window is: find the turn boundary in a small tail and
+# STOP — never parse the whole transcript. Every other window test asserts the
+# ANSWER, which is identical whether the early exit fires or the loop falls
+# through to a full read, so a regression that silently disables the early exit
+# (a renamed .found field, a changed jq output shape) would degrade every Stop
+# back to a full read with the suite still green. Verified: mutating
+# FOUND_BOUNDARY to a constant "false" leaves all other window assertions
+# passing.
+# The signal is an INVOCATION COUNT, not wall-clock: a jq shim on PATH logs
+# whether jq was ever handed the transcript path itself. Early exit => jq only
+# ever sees the tmpfile window. Immune to machine speed, so it cannot flake.
+# 20k lines with the boundary 500 from EOF: too big for the direct-read guard,
+# boundary well inside the first 2000-line window.
+scaffold ""
+{
+  for i in $(seq 1 19498); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'the boundary'
+  echo
+  atext 'working on it'
+  echo
+  for i in $(seq 1 500); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"b%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+mkdir -p "$TMP/jqbin"
+REAL_JQ="$(command -v jq)"
+{
+  echo '#!/bin/sh'
+  echo 'for a in "$@"; do case "$a" in *t.jsonl) echo "$a" >> "$JQLOG" ;; esac; done'
+  echo "exec $REAL_JQ \"\$@\""
+} > "$TMP/jqbin/jq"
+chmod +x "$TMP/jqbin/jq"
+rm -f "$TMP/jqlog"
+OUT="$(JQLOG="$TMP/jqlog" PATH="$TMP/jqbin:$PATH" run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: early exit fires — jq never re-reads the whole transcript" \
+   'test "$(grep -c "t.jsonl" "$TMP/jqlog" 2>/dev/null || echo 0)" -eq 0'
+ck "window-scan: early-exit turn still re-injects normally" \
+   'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== window-scan: stale_count and the .a view still work through a grown window =="
+# Every other window assertion checks only status/active/decision. The scan
+# emits TWO views from one jq program — .l (the sentinel-bearing entry) and .a
+# (every text entry of the turn, used to tell "no sentinel at all" from "sentinel
+# in an earlier entry", the F03 rule). A window regression could break one view
+# and not the other, and nothing would notice. Exercise both at a size that
+# actually windows.
+scaffold ""
+setstate stale_limit 3
+{
+  for i in $(seq 1 19000); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'go'
+  echo
+  atext '<repete-done>a goal that does not match</repete-done>'
+  echo
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: mismatched claim through a window bumps stale_count" \
+   'grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
+ck "window-scan: mismatched claim through a window feeds the rejection back" \
+   'printf "%s" "$OUT" | jq -r ".reason" | grep -q "does NOT match"'
+
+echo "== window-scan: a failing window line-count falls back to the full read =="
+# Third instance of one failure class (after the wc -l undercount and the
+# unchecked tail): a support command failing, and that failure silently
+# reinterpreted as a legitimate terminal state. `tail` can write a full window
+# and the `grep -c` on that tmpfile still fail (I/O error, OOM-kill). Reading
+# the empty count as "fewer lines than requested" made the loop accept an
+# undersized, boundary-less window as final — a real <repete-done> outside it
+# went invisible. Reproduced with a grep shim failing only on the tmpfile.
+# Needs > DIRECT_READ_MAX lines so the growth loop is actually entered.
+scaffold ""
+{
+  for i in $(seq 1 17398); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'go'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 2600); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"b%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+mkdir -p "$TMP/gbin"
+{
+  echo '#!/bin/sh'
+  echo 'for a in "$@"; do case "$a" in *repete-window.*) exit 2 ;; esac; done'
+  echo 'exec /usr/bin/grep "$@"'
+} > "$TMP/gbin/grep"
+chmod +x "$TMP/gbin/grep"
+OUT="$(PATH="$TMP/gbin:$PATH" run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: failed window count still sees the sentinel" \
+   '/usr/bin/grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: failed window count tears down, does not re-inject" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
 echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
 scaffold ""
 mktx "did some work"
@@ -1173,5 +1446,122 @@ if [ -n "$RO_MODE" ]; then
 else
   echo "  SKIP: A-F01 read-only-state tests (root without runuser/nobody — cannot simulate an unwritable dir)"
 fi
+
+echo "== issue #21: unwritable .repete/ never emits a false success/pause claim =="
+# set_fm's OTHER ~10 call sites (done/paused-*/stale_count/summarizing-recovery)
+# used to discard its return value entirely: on a write failure they still
+# emitted their confident "done"/"paused"/"N consecutive claims" message and
+# exited 0, while the state on disk stayed at status:running/active:true. A
+# later Stop in the same session (once writable again) would then re-inject
+# into an unrelated turn, or the stale counter would never advance because
+# every Stop re-read 0. Reuses A-F01's RO_MODE detection.
+if [ -n "$RO_MODE" ]; then
+  ro_run21(){ # dir input
+    if [ "$RO_MODE" = direct ]; then
+      printf '%s' "$2" | CLAUDE_PROJECT_DIR="$1" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null
+    else
+      printf '%s' "$2" | runuser -u nobody -- env CLAUDE_PROJECT_DIR="$1" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null
+    fi
+  }
+
+  echo "  -- matching done-claim on unwritable state --"
+  R21="$(mktemp -d)"
+  mkdir -p "$R21/.repete"
+  scaffold ""
+  cp "$TMP/.repete/loop.local.md" "$R21/.repete/loop.local.md"
+  mktx "<repete-done>all tests pass</repete-done>"; cp "$TMP/t.jsonl" "$R21/t.jsonl"
+  chmod 755 "$R21"; chmod 644 "$R21/.repete/loop.local.md" "$R21/t.jsonl"
+  chmod 555 "$R21/.repete"
+  OUT="$(ro_run21 "$R21" "{\"transcript_path\":\"$R21/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 done: systemMessage does NOT claim completion" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"mission goal met\")" >/dev/null'
+  ck "#21 done: warning names the write failure" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  ck "#21 done: exit 0, no decision key (fail open)" 'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+  ck "#21 done: state on disk untouched (still running/active)" 'chmod 755 "$R21/.repete"; grep -qE "^status: running" "$R21/.repete/loop.local.md" && grep -qE "^active: true" "$R21/.repete/loop.local.md"; RC=$?; chmod 555 "$R21/.repete"; [ "$RC" -eq 0 ]'
+  chmod -R 755 "$R21"; rm -rf "$R21"
+
+  echo "  -- mismatched done-claim on unwritable state --"
+  R21="$(mktemp -d)"
+  mkdir -p "$R21/.repete"
+  scaffold ""
+  cp "$TMP/.repete/loop.local.md" "$R21/.repete/loop.local.md"
+  mktx "<repete-done>wrong goal</repete-done>"; cp "$TMP/t.jsonl" "$R21/t.jsonl"
+  chmod 755 "$R21"; chmod 644 "$R21/.repete/loop.local.md" "$R21/t.jsonl"
+  chmod 555 "$R21/.repete"
+  OUT="$(ro_run21 "$R21" "{\"transcript_path\":\"$R21/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 mismatch: warning names the write failure" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  ck "#21 mismatch: no persisted-count claim in systemMessage" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"consecutive done-claims\")" >/dev/null'
+  ck "#21 mismatch: exit 0, no decision key (fail open)" 'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+  ck "#21 mismatch: stale_count on disk untouched (still 0)" 'chmod 755 "$R21/.repete"; grep -qE "^stale_count: 0" "$R21/.repete/loop.local.md"; RC=$?; chmod 555 "$R21/.repete"; [ "$RC" -eq 0 ]'
+  chmod -R 755 "$R21"; rm -rf "$R21"
+
+  echo "  -- checkpoint on unwritable state --"
+  R21="$(mktemp -d)"
+  mkdir -p "$R21/.repete"
+  scaffold ""
+  cp "$TMP/.repete/loop.local.md" "$R21/.repete/loop.local.md"
+  mktx "done slice <repete-checkpoint>next: do part 2</repete-checkpoint>"; cp "$TMP/t.jsonl" "$R21/t.jsonl"
+  chmod 755 "$R21"; chmod 644 "$R21/.repete/loop.local.md" "$R21/t.jsonl"
+  chmod 555 "$R21/.repete"
+  OUT="$(ro_run21 "$R21" "{\"transcript_path\":\"$R21/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 checkpoint: no confident 'paused at checkpoint' claim" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"repete checkpoint\")" >/dev/null'
+  ck "#21 checkpoint: warning names the write failure" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  ck "#21 checkpoint: exit 0, no decision key (fail open)" 'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+  ck "#21 checkpoint: state on disk untouched (still running)" 'chmod 755 "$R21/.repete"; grep -qE "^status: running" "$R21/.repete/loop.local.md"; RC=$?; chmod 555 "$R21/.repete"; [ "$RC" -eq 0 ]'
+  chmod -R 755 "$R21"; rm -rf "$R21"
+
+  echo "  -- writable .repete/: behavior byte-identical to baseline (regression guard) --"
+  scaffold ""
+  mktx "<repete-done>all tests pass</repete-done>"
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 writable done: still tears loop down" 'grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
+  ck "#21 writable done: still emits the completion message" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"mission goal met\")" >/dev/null'
+
+  scaffold ''
+  mktx "done slice <repete-checkpoint>next: do part 2</repete-checkpoint>"
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 writable checkpoint: still sets paused-checkpoint" 'grep -qE "^status: paused-checkpoint" "$TMP/.repete/loop.local.md"'
+else
+  echo "  SKIP: #21 read-only-state tests (root without runuser/nobody — cannot simulate an unwritable dir)"
+fi
+
+echo "== #21 order: a half-written teardown degrades to INERT, never done+active =="
+# The teardown is two writes and set_fm_or_warn exits on the first failure, so
+# the only reachable partial is "write 1 landed, write 2 did not" (the disk
+# fills between them). With `status` written first that partial is
+# `status: done / active: true`: the hook early-exits on the status, but the
+# statusline and /repete-status both key off `active` and render a torn-down
+# loop as healthy. Writing `active: false` first makes the same partial inert
+# instead (Copilot review, PR #26).
+# Simulated by failing the mv that carries the `active: false` write — the
+# SECOND write pre-fix, the FIRST post-fix. Pre-fix that leaves done+active on
+# disk; post-fix it leaves the file untouched. Either way no completion message.
+scaffold ""
+mktx "<repete-done>all tests pass</repete-done>"
+REAL_MV="$(command -v mv)"
+mkdir -p "$TMP/mvbin"
+{
+  echo '#!/bin/sh'
+  echo 'for a in "$@"; do'
+  echo '  case "$a" in *.tmp.*) if grep -q "^active: false" "$a" 2>/dev/null; then exit 1; fi ;; esac'
+  echo 'done'
+  echo "exec $REAL_MV \"\$@\""
+} > "$TMP/mvbin/mv"
+chmod +x "$TMP/mvbin/mv"
+OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | PATH="$TMP/mvbin:$PATH" CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H")"
+ck "#21 order: never leaves status:done with active:true" \
+   '! { grep -qE "^status: done" "$TMP/.repete/loop.local.md" && grep -qE "^active: true" "$TMP/.repete/loop.local.md"; }'
+ck "#21 order: no completion claim on the failed teardown" \
+   '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"mission goal met\")" >/dev/null'
+ck "#21 order: warns that state could not be saved" \
+   'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+ck "#21 order: fails open (no decision key)" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+# Control: with mv working, the same fixture still tears down completely.
+scaffold ""
+mktx "<repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#21 order control: unimpeded teardown writes BOTH keys" \
+   'grep -qE "^active: false" "$TMP/.repete/loop.local.md" && grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
 
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

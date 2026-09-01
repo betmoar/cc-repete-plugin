@@ -1,5 +1,9 @@
 # Spec: gauntlet mode — builder/critic rounds inside the repete loop
 
+> **Design record — may lag the code. `hooks/stop-hook.sh` is authoritative.** This file
+> records what was approved and why, not what ships today. Refinements are appended as
+> `> Refined in vX.Y.Z` notes pointing at the live logic; the original text is left standing.
+
 Status: approved (user "go" 2026-08-16, after stale-detection v0.2.0 on feat/stale-detection).
 Source: the Gauntlet pattern (Prompt Index guide), full seven steps — including the ones the
 stale-detection brainstorm converged away from. Supersedes that convergence for THIS feature
@@ -76,6 +80,12 @@ Round discipline: one round = one iteration = ideally one commit. A round that l
 to the previous round is not wasted — the gap it exposes is the next round's target.
 
 ## Prompt-code changes
+
+> Refined in v0.2.3: the two bundled skills were consolidated into a single
+> `skills/repete-loops/`. The two rows below (the running skill's "Gauntlet runs" section
+> and the designing skill's one-paragraph pointer) collapse into one live site:
+> `skills/repete-loops/references/gauntlet.md`, summarized by §5 of that skill's SKILL.md.
+> The round discipline and critic-packet hygiene described below are unchanged.
 
 | Site | Change |
 | --- | --- |

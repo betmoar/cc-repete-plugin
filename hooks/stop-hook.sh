@@ -177,6 +177,26 @@ set_fm() { # key value  (atomic update of a key ONLY within the first frontmatte
 
 emit() { jq -n --arg m "$1" '{systemMessage:$m}'; }
 
+# set_fm_or_warn: guard for every set_fm call whose caller is about to emit a
+# message that IMPLICITLY PROMISES the write landed (done/paused-*/stale_count/
+# the stranded-summarizing recovery). Two call sites (budget pass-1, the
+# iteration bump) already guarded set_fm directly before this helper existed —
+# this generalizes that pattern to the rest instead of leaving them to discard
+# the return value, print a confident success message, and exit 0 while state
+# on disk stayed unchanged (issue #21: state read "active: true / status:
+# running" after a reported mission-complete).
+# Failure direction: on write failure, NEVER emit the caller's claimed outcome
+# (done/paused/reset) and NEVER set decision:block — emit a warning that names
+# the write failure and what it means (state could not be saved), then exit 0
+# immediately so the Stop is let through untouched. This mirrors the two
+# pre-existing F01 guarded sites; it must never become a new path that blocks.
+set_fm_or_warn() { # key value
+  if ! set_fm "$1" "$2"; then
+    emit "⚠️ repete: cannot write .repete/loop.local.md (read-only? disk full?) — the loop's state could NOT be saved, so nothing was actually torn down, paused, or counted. This Stop is allowed through as a plain pass-through. Fix the write problem, then /repete-continue."
+    exit 0
+  fi
+}
+
 # ---- lesson catalog helpers ----------------------------------------------
 # Read one frontmatter value from a lesson card. The card template carries a
 # leading <!-- ... --> comment BEFORE its '---' block, so key off the first
@@ -357,7 +377,66 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # from "a turn whose sentinel sits in an earlier entry" — the stale-counter
   # reset below must not fire on the latter (2026-08-31 audit F03). Emitted as one JSON
   # object so the transcript is still parsed exactly once per Stop.
-  TURN_SCAN="$(jq -cRs '
+  #
+  # GROW-THE-WINDOW (audit F13): re-parsing the WHOLE transcript on every Stop is
+  # O(transcript) work paid every iteration — superlinear over a loop's lifetime,
+  # worst exactly in the long-loop case this plugin exists for. A naive tail-bound
+  # is UNSAFE: 500 trailing sidechain lines (a subagent dispatch after the real
+  # done-claim) can sit between the window's start and the turn boundary, so a
+  # fixed-size tail would silently scan into the WRONG turn — fail-closed, the one
+  # forbidden direction (a done-claim goes invisible, or a spent sentinel from the
+  # previous turn re-fires).
+  #
+  # The predicate that makes growing safe is NOT "found assistant text" (the
+  # issue's original phrasing) — that is wrong two ways: (a) a legitimate
+  # tool-only turn has no assistant text and would force a full read every Stop,
+  # safe but pointless; (b) far worse, a window can CONTAIN assistant text while
+  # missing the turn boundary that bounds it — the jq program's $turn_start then
+  # falls back to -1 ("no boundary in this window") and silently scans across
+  # into the PREVIOUS turn, which can re-fire a spent sentinel. That is exactly
+  # the fail-closed trap this fix exists to avoid, just reached from a different
+  # angle.
+  #
+  # The correct predicate: grow the window until it contains AT LEAST ONE
+  # main-thread, non-tool_result, role:user row (a turn boundary), using the
+  # SAME boundary test the full-read program already uses. Proof of safety: the
+  # window is always a trailing SUFFIX of the file (built with `tail -n`, which
+  # only ever returns whole lines — no partial first line, so nothing to drop).
+  # A suffix that contains at least one boundary contains, by construction, the
+  # LAST boundary in the whole file (nothing after the suffix's start could
+  # contain an earlier-in-file boundary that ranks after this one — the suffix
+  # already runs to EOF). So the turn slice computed from the window is
+  # identical to the one the full read would compute, and therefore .l and .a
+  # are byte-identical too. Growing never changes WHICH entry is chosen, only
+  # how much is parsed to find it.
+  #
+  # Terminal fallback: once `tail -n N` returns FEWER than N lines, the window
+  # already IS the whole file — further growth is impossible, so its result is
+  # used as-is even with zero boundaries found. That covers the one case where
+  # $turn_start legitimately stays -1: a fresh transcript with no user row at
+  # all, which must fall back to "scan everything" (the pre-existing, correct
+  # full-read scope), not loop forever.
+  WINDOW_LINES=2000   # covers the documented hazard (500 sidechain lines) with
+                       # margin; most turns are far smaller, so this is a single
+                       # pass in the common case.
+  WINDOW_GROWTH=8      # aggressive growth so the rare oversized-turn case
+                       # converges in one or two re-reads instead of many.
+  # The window is written to a TEMP FILE, not captured into a bash variable:
+  # measured on a real 27MB/1.7k-line transcript (fat lines), `W="$(tail ...)"`
+  # cost ~0.5s of pure bash string-copy overhead even though the window itself
+  # is small — command substitution buffers the whole thing through bash's
+  # internal read loop. Feeding jq a file avoids that copy entirely and is
+  # what makes the small-window case actually fast (jq -cRs takes a filename
+  # argument directly, so no second `cat`/pipe copy either).
+  # The scan program, defined ONCE. It was three verbatim copies (fast path,
+  # mktemp-failure fallback, growth loop) with nothing enforcing they stay in
+  # sync — a future change to the turn-boundary or text-extraction rules had to
+  # land in three places or the paths would silently disagree, which is exactly
+  # the class of bug the #18 work existed to fix. `.found` is emitted on every
+  # path; only the growth loop reads it, and an ignored key costs nothing.
+  # shellcheck disable=SC2016  # $rows/$turn_start/$texts are jq variables — the
+  # single quotes are what keep the shell from expanding them, as intended.
+  TURN_SCAN_JQ='
       [ split("\n")[] | fromjson? | objects ] as $rows
       | ( [ $rows | to_entries[]
             | select(.value.isSidechain != true)
@@ -375,8 +454,141 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
             then ([ .[] | objects | select(.type=="text") | .text | strings ] | join("\n"))
             else tostring end
           | select(test("\\S")) ] as $texts
-      | {l: ($texts | last // ""), a: ($texts | join("\n"))}
-    ' "$TRANSCRIPT" 2>/dev/null || echo "")"
+      | {found: ($turn_start != -1), l: ($texts | last // ""), a: ($texts | join("\n"))}'
+  TURN_SCAN=""
+  # Whole-file line count, so a transcript that already fits inside the
+  # initial window skips mktemp/tail entirely and reads TRANSCRIPT directly
+  # (jq takes a filename argument, no copy either way) — the common case for
+  # a fresh or short-lived loop, and the shape where the tmpfile machinery
+  # would otherwise be pure overhead over the pre-window behavior. Counting
+  # the whole file is cheap relative to the jq parse that follows either way
+  # (measured: single-digit ms vs jq's tens-of-ms-per-MB).
+  #
+  # `grep -c ''` NOT `wc -l`: wc counts NEWLINES, so a file whose last line has
+  # no trailing newline reads one short. Here that is merely conservative (a
+  # 2001-line file reads as 2000 and takes the full read), but the SAME
+  # undercount in the growth loop below was a real fail-closed bug — see there.
+  # Using one counter for both keeps them from drifting apart again. Measured
+  # on 37.9MB/100k lines: grep -c 0.00s, wc -l 0.04s, awk END{NR} 0.76s.
+  TOTAL_LINES="$(grep -c '' "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
+  # Direct read at FOUR windows, not one. A file only slightly larger than one
+  # window is the worst case for windowing: it pays a full wasted window and
+  # then the full read anyway. At 2001 lines that is 4001 lines parsed for a
+  # 2001-line question — 2.0x, worse than never windowing at all, and it made
+  # the "~1.25x worst case" claim in the docs false (caught in review; the
+  # SECOND time an unqualified worst-case bound shipped here, so the fix is to
+  # make the code match the claim rather than soften the claim). Below 4x the
+  # window there is nothing to win: the first window alone is ≥25% of the file.
+  # With this guard the worst case really is 1.25x for every file size —
+  # verified by simulating the loop arithmetic over 2001..400000 lines.
+  # A FAILED count (empty, or anything non-numeric) takes the direct read too:
+  # it is the cheap, always-correct branch, and the alternative — routing a
+  # 2-line transcript through mktemp/tail/growth — silently loses the whole
+  # optimization for the common short-loop case with no correctness gain. The
+  # regex, not a bare -n, is deliberate: `[[ "$x" -le N ]]` on a non-numeric
+  # value is a bash runtime error, which under `set -u` aborts the hook mid-run
+  # with no JSON emitted. grep -c only ever yields digits or empty today, so
+  # this guards a contract, not a live bug.
+  DIRECT_READ_MAX=$(( WINDOW_LINES * 4 ))
+  if [[ ! "${TOTAL_LINES:-}" =~ ^[0-9]+$ || "$TOTAL_LINES" -le "$DIRECT_READ_MAX" ]]; then
+    # Small enough that windowing cannot pay for itself: read it directly.
+    TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+  else
+    TURN_SCAN_TMP="$(mktemp "${TMPDIR:-/tmp}/repete-window.XXXXXX" 2>/dev/null || echo "")"
+    if [[ -z "$TURN_SCAN_TMP" ]]; then
+      # mktemp failed (read-only /tmp, exotic sandbox): fall back to the
+      # pre-window full read rather than losing sentinel visibility.
+      TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+      continue_scan=0
+    else
+      # SC2329 (shellcheck >= 0.10) and SC2317 (older, e.g. Ubuntu apt in CI) are
+      # the same complaint under two codes: the function looks unreachable because
+      # it is only ever invoked indirectly, by the EXIT trap below. Both codes must
+      # be listed — CI runs an older shellcheck than a typical dev machine, so
+      # disabling only the newer code passes locally and fails in CI.
+      # shellcheck disable=SC2329,SC2317
+      cleanup_turn_scan_tmp() { [[ -n "$TURN_SCAN_TMP" ]] && rm -f "$TURN_SCAN_TMP" 2>/dev/null; }
+      trap cleanup_turn_scan_tmp EXIT
+      continue_scan=1
+    fi
+    PARSED_LINES=0   # cumulative window lines already parsed — see the bound below
+    while [[ "$continue_scan" == "1" ]]; do
+      # A FAILED tail must fall back to the full read, not proceed on a stale or
+      # empty window. Without this the windowing introduces a NEW fail-closed
+      # path the pre-window hook never had: `tail` dying (ENOSPC writing the
+      # tmpfile, an exotic PATH, a mid-loop permission change) leaves the tmpfile
+      # empty, the scan finds no sentinel, and a real <repete-done> that the old
+      # code saw goes invisible — the loop re-injects past its own exit
+      # condition. Reproduced with a `tail` shim exiting 1: old hook tore down,
+      # windowed hook re-injected. Reading the file directly cannot be worse
+      # than the behavior we replaced, so that is the fallback.
+      if ! tail -n "$WINDOW_LINES" "$TRANSCRIPT" > "$TURN_SCAN_TMP" 2>/dev/null; then
+        TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+        break
+      fi
+      # `grep -c ''` counts LINES; `wc -l` counts NEWLINES. That difference was a
+      # real fail-closed bug (found by the adversarial review of the first cut of
+      # this loop, reproduced): a transcript whose final line carries no trailing
+      # newline — the routine shape of a file being appended to right now, read
+      # between the line's bytes and its newline — makes `tail -n 2000` return
+      # 2000 whole lines but only 1999 newlines. The "fewer lines than requested
+      # => the window IS the file" test then fired one line early and STOPPED
+      # GROWING with the turn boundary still outside the window, so a real
+      # <repete-done> went invisible and the loop kept re-injecting past its own
+      # exit condition. Never count a window with wc -l.
+      WINDOW_ROWS="$(grep -c '' "$TURN_SCAN_TMP" 2>/dev/null | tr -d ' ')"
+      SCAN_RESULT="$(jq -cRs "$TURN_SCAN_JQ" "$TURN_SCAN_TMP" 2>/dev/null || echo "")"
+      TURN_SCAN="$SCAN_RESULT"
+      FOUND_BOUNDARY="$(printf '%s' "$SCAN_RESULT" | jq -r '.found // false' 2>/dev/null || echo "false")"
+      if [[ "$FOUND_BOUNDARY" == "true" ]]; then
+        break
+      fi
+      if [[ ! "${WINDOW_ROWS:-}" =~ ^[0-9]+$ ]]; then
+        # The COUNT failed, which is not the same as "tail returned short".
+        # `tail` can write a full window and the `grep -c` on that tmpfile still
+        # fail (I/O error, OOM-kill) — the same transient class this file already
+        # guards for perl and set_fm. Reading empty as "fewer lines than
+        # requested" made the loop accept an undersized, boundary-less window as
+        # final: a real <repete-done> outside it went invisible and the loop
+        # re-injected past its own exit condition. Reproduced with a grep shim
+        # failing only on the tmpfile: control tore down, fault-injected run
+        # stayed running. Third instance of one class — a support command's
+        # failure silently reinterpreted as a legitimate terminal state (after
+        # the wc -l undercount and the unchecked tail). Failure direction: read
+        # the whole file, never guess that the window was complete.
+        TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+        break
+      fi
+      if [[ "$WINDOW_ROWS" -lt "$WINDOW_LINES" ]]; then
+        # tail returned fewer lines than requested: we already read the whole
+        # file. This IS the full-read result (no boundary anywhere is the
+        # legitimate fresh-transcript case) — stop growing.
+        break
+      fi
+      # Growing re-reads from scratch, so R rounds cost the SUM of the windows,
+      # not the largest one — the waste is GEOMETRIC, not singular. Bounding only
+      # the final doubling (the first attempt at this) does not help: with growth
+      # 8 a 256k-line file still burned 2000+16000+128000 wasted lines before the
+      # full read (1.57x, measured +78% wall-clock — the same magnitude as the
+      # regression that bound was meant to remove).
+      # So bound the CUMULATIVE window work instead: once the windows parsed so
+      # far plus the next one would exceed a QUARTER of the file, stop guessing
+      # and read the file. Together with the 4-window direct-read guard above
+      # (which removes the small-file case where one wasted window plus a full
+      # read is 2x), the worst case is 1.25x a plain full read at EVERY file
+      # size — simulated over 2001..400000 lines, peak 1.25x at ~72000. The case
+      # the window exists for — a boundary a few thousand lines back in a 100k
+      # line transcript — stops at the first window and never reaches here.
+      # TOTAL_LINES and WINDOW_ROWS are grep -c counts (never wc -l).
+      PARSED_LINES=$(( PARSED_LINES + WINDOW_ROWS ))
+      NEXT_WINDOW=$(( WINDOW_LINES * WINDOW_GROWTH ))
+      if [[ "${TOTAL_LINES:-}" =~ ^[0-9]+$ && $(( (PARSED_LINES + NEXT_WINDOW) * 4 )) -gt "$TOTAL_LINES" ]]; then
+        TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+        break
+      fi
+      WINDOW_LINES="$NEXT_WINDOW"
+    done
+  fi
   LAST_OUTPUT="$(printf '%s' "$TURN_SCAN" | jq -r '.l // ""' 2>/dev/null || echo "")"
   TURN_TEXT_ALL="$(printf '%s' "$TURN_SCAN" | jq -r '.a // ""' 2>/dev/null || echo "")"
 fi
@@ -420,16 +632,25 @@ if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /.*<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
   if [[ -n "$DONE" ]]; then
     if [[ "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
-      set_fm status "done"
-      set_fm active false
+      # ORDER MATTERS: `active` first. set_fm_or_warn exits on the FIRST failed
+      # write, so the only reachable partial is "write 1 landed, write 2 did
+      # not" (disk fills between them). With `status` first that partial is
+      # `status: done / active: true` — the hook early-exits on the status, but
+      # the statusline keys off `active` and renders the torn-down loop as a
+      # healthy running one, and /repete-status reads it as live. Writing
+      # `active: false` first makes the same partial degrade to an INERT loop
+      # (the ACTIVE gate above exits, the statusline prints nothing), which is
+      # the fail-open direction (Copilot review, PR #26).
+      set_fm_or_warn active false
+      set_fm_or_warn status "done"
       emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
       exit 0
     # Mismatched done-claim: count it, tell the agent why it was rejected.
     elif [[ "$STALE_LIMIT" -gt 0 ]]; then
       STALE=$((STALE + 1))
-      set_fm stale_count "$STALE"
+      set_fm_or_warn stale_count "$STALE"
       if [[ "$STALE" -ge "$STALE_LIMIT" ]]; then
-        set_fm status paused-stale
+        set_fm_or_warn status paused-stale
         emit "🧭 repete: ${STALE} consecutive done-claims did not match the mission goal (limit ${STALE_LIMIT}, phase ${PHASE}). The loop may be spinning on a false claim of done. Review .repete/MISSION.md: fix the goal string, edit stale_limit, reset stale_count and /repete-continue — or /repete-cancel."
         exit 0
       fi
@@ -449,7 +670,12 @@ if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]
     TURN_HAS_DONE=0
     printf '%s' "$TURN_TEXT_ALL" | perl -0777 -ne 'exit(/<repete-done>.*?<\/repete-done>/s ? 0 : 1)' 2>/dev/null && TURN_HAS_DONE=1
     if [[ "$STALE" -gt 0 && "$TURN_HAS_DONE" -eq 0 ]]; then
-      set_fm stale_count 0
+      # Guarded like the bump write above (issue #21): a reset that silently
+      # fails to persist means the on-disk counter stays stuck above 0 while
+      # every later Stop keeps computing from an in-memory 0 — the same
+      # "state and reality disagree" shape the bump guard exists for, just
+      # with no confident message attached until now.
+      set_fm_or_warn stale_count 0
       STALE=0
     fi
   fi
@@ -459,7 +685,7 @@ fi
 if [[ $HAS_CHECKPOINT -eq 1 ]]; then
   PAYLOAD="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /.*<repete-checkpoint>(.*?)<\/repete-checkpoint>/s' 2>/dev/null)"
   printf '%s\n' "$PAYLOAD" > "$TRANSITION_FILE"
-  set_fm status paused-checkpoint
+  set_fm_or_warn status paused-checkpoint
   emit "⏸ repete checkpoint (phase ${PHASE}, iteration ${ITERATION}). Proposed next payload → .repete/transition.md. Review/edit it, then /repete-continue to launch the next loop, or /repete-cancel to stop."
   exit 0
 fi
@@ -474,7 +700,7 @@ fi  # end: sentinel handling suppressed while 'summarizing'
 # an empty handoff and lose the in-flight delta. The budget two-step below owns
 # this Stop; the cap re-applies normally once the loop returns to 'running'.
 if [[ "$STATUS" != "summarizing" && "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
-  set_fm status paused-max
+  set_fm_or_warn status paused-max
   emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
   exit 0
 fi
@@ -492,7 +718,7 @@ if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   LINES="$(wc -l < "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
   if [[ "${LINES:-0}" -gt "$CTX_BUDGET" ]]; then
     if [[ "$STATUS" == "summarizing" ]]; then
-      set_fm status paused-context
+      set_fm_or_warn status paused-context
       # Treat a handoff as "saved" only if the agent actually FILLED it. A bare
       # -s/non-whitespace test would pass a copied-but-unfilled template, since
       # the template's HTML comment, "## headings" and "<placeholder>" lines are
@@ -570,14 +796,14 @@ fi
 # budget disabled). Clear the transient status so we don't take the pass-2
 # paused-context path on a future trip without first writing a fresh handoff.
 if [[ "$STATUS" == "summarizing" ]]; then
-  set_fm status running
+  set_fm_or_warn status running
   STATUS=running
   # The max-iterations yield above was skipped because status was 'summarizing'.
   # Now that we've returned to 'running', re-apply it here so a cap reached
   # during the handoff is still enforced on THIS Stop — otherwise the loop would
   # run one cycle past the configured cap before the next Stop catches it.
   if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
-    set_fm status paused-max
+    set_fm_or_warn status paused-max
     emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
     exit 0
   fi
