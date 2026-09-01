@@ -489,7 +489,19 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
     fi
     PARSED_LINES=0   # cumulative window lines already parsed — see the bound below
     while [[ "$continue_scan" == "1" ]]; do
-      tail -n "$WINDOW_LINES" "$TRANSCRIPT" > "$TURN_SCAN_TMP" 2>/dev/null
+      # A FAILED tail must fall back to the full read, not proceed on a stale or
+      # empty window. Without this the windowing introduces a NEW fail-closed
+      # path the pre-window hook never had: `tail` dying (ENOSPC writing the
+      # tmpfile, an exotic PATH, a mid-loop permission change) leaves the tmpfile
+      # empty, the scan finds no sentinel, and a real <repete-done> that the old
+      # code saw goes invisible — the loop re-injects past its own exit
+      # condition. Reproduced with a `tail` shim exiting 1: old hook tore down,
+      # windowed hook re-injected. Reading the file directly cannot be worse
+      # than the behavior we replaced, so that is the fallback.
+      if ! tail -n "$WINDOW_LINES" "$TRANSCRIPT" > "$TURN_SCAN_TMP" 2>/dev/null; then
+        TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+        break
+      fi
       # `grep -c ''` counts LINES; `wc -l` counts NEWLINES. That difference was a
       # real fail-closed bug (found by the adversarial review of the first cut of
       # this loop, reproduced): a transcript whose final line carries no trailing

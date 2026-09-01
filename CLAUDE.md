@@ -240,6 +240,14 @@ If you add a check, decide its failure direction first and write it in a comment
   Both counters (fast-path `TOTAL_LINES`, loop `WINDOW_ROWS`) use `grep -c ''` so they
   cannot drift apart again. Measured on 37.9MB/100k lines: `grep -c` 0.00s, `wc -l`
   0.04s, `awk END{NR}` 0.76s — the safe counter is also the fastest.
+- **Every external command the window scan depends on must fall back to the full read.**
+  The pre-window hook needed only `jq`; the windowed one also needs `tail`, `grep -c` and
+  `mktemp`. Each is a NEW way to lose a sentinel the old code saw — `tail` dying (ENOSPC
+  writing the tmpfile, a broken PATH, a mid-loop permission change) leaves an empty window,
+  the scan finds nothing, and a real `<repete-done>` goes invisible while the loop
+  re-injects past its own exit condition. Reproduced with a `tail` shim exiting 1: the old
+  hook tore down, the windowed hook re-injected. Every such failure now reads the whole
+  file instead — an optimization may never be worse than the thing it replaced.
 - **Bound CUMULATIVE window work, not the last doubling.** R growth rounds parse the SUM
   of the windows, so the waste is GEOMETRIC. The first attempt bounded only the final
   doubling (`NEXT_WINDOW >= TOTAL_LINES/2`) and a second review refuted it: on a 256k-line

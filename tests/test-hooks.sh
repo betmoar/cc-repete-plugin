@@ -1071,6 +1071,32 @@ ck "window-scan: deep boundary still tears down (== full-read answer)" \
 ck "window-scan: deep boundary emits no decision (teardown, not re-inject)" \
    'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
 
+echo "== window-scan: a FAILING tail falls back to the full read (no lost sentinel) =="
+# The windowed scan introduced a dependency the pre-window hook did not have:
+# if `tail` fails (ENOSPC writing the tmpfile, a broken PATH, a mid-loop
+# permission change) the tmpfile is empty, the scan finds no sentinel, and a
+# real <repete-done> the OLD code saw goes invisible — fail-CLOSED. Reproduced
+# with a tail shim exiting 1: old hook tore down, windowed hook re-injected.
+# A shim on PATH is the only way to make tail fail deterministically here.
+scaffold ""
+{
+  uprompt 'go'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 3000); do
+    printf '{"isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"noise %d"}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+mkdir -p "$TMP/failbin"
+printf '#!/bin/sh\nexit 1\n' > "$TMP/failbin/tail"
+chmod +x "$TMP/failbin/tail"
+OUT="$(PATH="$TMP/failbin:$PATH" run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: failing tail still sees the sentinel (falls back to full read)" \
+   'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: failing tail tears down, does not re-inject" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
 echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
 scaffold ""
 mktx "did some work"
