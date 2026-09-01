@@ -59,6 +59,37 @@ if [[ ! -f "$STATE_FILE" ]]; then
   exit 1
 fi
 
+# ---- de-BOM first, or refuse (mirrors the hook's v0.2.2 on-disk de-BOM) ----
+# A UTF-8 BOM before the opening '---' glues to the fence, so the awk below
+# never counts it: the phase read comes back empty AND — the dangerous half —
+# the writer's f==1 block never opens, so all six keys would land in the wrong
+# scope. That is the same C1 trap v0.2.2 fixed in the hook, which de-BOMs the
+# state file on disk before it reads or writes anything. Reaching promote.sh
+# with a BOM therefore takes an editor adding one between the pause and the
+# continue, but the consequence is silent misplacement of every key, so it is
+# worth the eight lines.
+# Failure direction (LOUD, per this file's rule): strip the BOM and continue if
+# we can persist the stripped file; otherwise REFUSE, naming the BOM. Never
+# proceed to the write on a file we know is mis-scoped, and never guess — the
+# one thing worse than refusing is writing six keys into the body.
+# NOTE: `od -An -tx1` pads with VARIABLE whitespace (two spaces between bytes on
+# BSD od, leading indent on both BSD and GNU), so the byte pattern is matched
+# after squeezing whitespace — a literal 'ef bb bf' grep silently never matches
+# and the guard becomes a no-op. Caught by the red-first run of the tests below.
+if [[ "$(head -c 3 "$STATE_FILE" 2>/dev/null | od -An -tx1 2>/dev/null | tr -s '[:space:]' ' ')" == " ef bb bf "* ]]; then
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "promote.sh: FAIL — $STATE_FILE starts with a UTF-8 BOM and perl is not on PATH to strip it. The BOM hides the opening '---' from the frontmatter parser; re-save the file as UTF-8 without BOM, then re-run." >&2
+    exit 1
+  fi
+  BOM_TMP="$STATE_FILE.bom.$$"
+  if ! perl -pe 's/^\xEF\xBB\xBF// if $. == 1' "$STATE_FILE" > "$BOM_TMP" 2>/dev/null \
+     || ! mv "$BOM_TMP" "$STATE_FILE" 2>/dev/null; then
+    rm -f "$BOM_TMP" 2>/dev/null
+    echo "promote.sh: FAIL — $STATE_FILE starts with a UTF-8 BOM and it could not be rewritten without one (read-only file or directory?). The BOM hides the opening '---' from the frontmatter parser; fix the write problem or re-save as UTF-8 without BOM, then re-run." >&2
+    exit 1
+  fi
+fi
+
 # ---- read current phase (scoped to the FIRST frontmatter block, mirrors fm()/C1) ----
 CUR_PHASE_RAW="$(awk '
   BEGIN{f=0}

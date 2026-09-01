@@ -118,6 +118,36 @@ ck "non-zero exit on malformed phase" 'test "$RC" -ne 0'
 ck "stderr names the phase problem"   'printf "%s" "$ERR" | grep -qi "phase"'
 ck "file left unmodified on malformed phase" 'grep -qE "^phase: notanumber" "$TMP/.repete/loop.local.md"'
 
+echo "== BOM'd state file: stripped, then promoted correctly (v0.2.3) =="
+# A BOM glues to the opening '---' so awk never counts the fence: the phase read
+# comes back empty AND the writer's f==1 block never opens, which would scatter
+# all six keys into the wrong scope. Pre-fix this failed with a misleading
+# "'phase' is missing" message; the six-key write must land correctly instead.
+scaffold 4 9 3 paused-checkpoint false '"OLD"'
+printf '\xef\xbb\xbf%s' "$(cat "$TMP/.repete/loop.local.md")" > "$TMP/.repete/bom.md"
+mv "$TMP/.repete/bom.md" "$TMP/.repete/loop.local.md"
+OUT="$(bash "$P" "$TMP/.repete/loop.local.md" 2>&1)"; RC=$?
+ck "BOM'd file: exit 0"            'test "$RC" -eq 0'
+ck "BOM removed from disk"         '! head -c 3 "$TMP/.repete/loop.local.md" | od -An -tx1 | grep -q "ef bb bf"'
+ck "BOM'd file: phase 4->5"        '[ "$(fmval phase "$TMP/.repete/loop.local.md")" = "5" ]'
+ck "BOM'd file: status -> running" '[ "$(fmval status "$TMP/.repete/loop.local.md")" = "running" ]'
+ck "BOM'd file: active -> true"    '[ "$(fmval active "$TMP/.repete/loop.local.md")" = "true" ]'
+ck "BOM'd file: session_id blanked" '[ "$(fmval session_id "$TMP/.repete/loop.local.md")" = "\"\"" ]'
+ck "BOM'd file: keys not scattered into body" 'test "$(grep -c "^status: running" "$TMP/.repete/loop.local.md")" -eq 1'
+
+echo "== BOM'd + unwritable -> loud refusal naming the BOM, file untouched =="
+scaffold 4 9 3 paused-checkpoint false '"OLD"'
+printf '\xef\xbb\xbf%s' "$(cat "$TMP/.repete/loop.local.md")" > "$TMP/.repete/bom.md"
+mv "$TMP/.repete/bom.md" "$TMP/.repete/loop.local.md"
+BOM_MD5_BEFORE="$(md5 -q "$TMP/.repete/loop.local.md" 2>/dev/null || md5sum "$TMP/.repete/loop.local.md" | cut -d' ' -f1)"
+chmod 555 "$TMP/.repete"
+ERR="$(bash "$P" "$TMP/.repete/loop.local.md" 2>&1 1>/dev/null)"; RC=$?
+chmod 755 "$TMP/.repete"
+BOM_MD5_AFTER="$(md5 -q "$TMP/.repete/loop.local.md" 2>/dev/null || md5sum "$TMP/.repete/loop.local.md" | cut -d' ' -f1)"
+ck "BOM+unwritable: non-zero exit" 'test "$RC" -ne 0'
+ck "BOM+unwritable: names the BOM" 'printf "%s" "$ERR" | grep -qi "BOM"'
+ck "BOM+unwritable: file byte-identical" '[ "$BOM_MD5_BEFORE" = "$BOM_MD5_AFTER" ]'
+
 echo "== No argument -> non-zero exit + message =="
 ERR="$(bash "$P" 2>&1 1>/dev/null)"; RC=$?
 ck "non-zero exit on no argument" 'test "$RC" -ne 0'

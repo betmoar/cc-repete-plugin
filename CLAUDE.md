@@ -182,7 +182,17 @@ If you add a check, decide its failure direction first and write it in a comment
   exists to fix: non-zero exit plus a message naming what could not be written. Do not
   harmonize it with `set_fm`'s fail-open direction. It mirrors `set_fm`'s C1/C2/C3 and
   #11 guarantees, generalized to six keys in one awk pass; it does NOT touch the body —
-  the payload replace stays a Write the calling command performs.
+  the payload replace stays a Write the calling command performs. It also de-BOMs the
+  state file before reading (v0.2.3): a BOM glues to the opening `---`, so the phase read
+  returns empty AND the writer's `f==1` block never opens — six keys would land in the
+  wrong scope. Same C1 trap the hook's on-disk de-BOM fixed in v0.2.2. If the BOM cannot
+  be stripped (unwritable, no perl) it REFUSES and says so, rather than writing into a
+  file it knows is mis-scoped.
+- **`od -An -tx1` pads with variable whitespace** — two spaces between bytes on BSD od,
+  plus a leading indent. A `grep -q 'ef bb bf'` against its output silently never matches,
+  turning a byte-signature guard into a no-op that looks correct in review. Squeeze with
+  `tr -s '[:space:]' ' '` and match against `" ef bb bf "*`. This was live in promote.sh's
+  BOM guard for one commit and only surfaced because the tests were run red-first.
 - **Iteration semantics:** `iteration` counts completed work turns; the cap check is
   `>=` *before* the bump, so `max_iterations: 3` = exactly 3 work turns. The handoff
   (`summarizing`) turn is free — no bump.

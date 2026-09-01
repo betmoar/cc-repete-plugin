@@ -10,6 +10,7 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 
 ### Added
 - **`hooks/promote.sh`** — checkpoint promotion is mechanical instead of prompt-code. `/repete-continue` step 4 used to instruct the agent to hand-edit six frontmatter keys, where a single miss silently killed or miscounted the resumed loop; it now shells out to one atomic awk pass. Unlike the Stop hook, promote.sh fails LOUD — it is human-gated, so a silent partial write is the defect, not the safe direction. Covered by a new `tests/test-promote.sh` (33 assertions), wired into run-all.sh, CI, and the release workflow (issue #8).
+- **`promote.sh` de-BOMs the state file before reading it.** A UTF-8 BOM glues to the opening `---`, so the phase read came back empty *and* the writer's frontmatter block never opened — all six keys would have landed in the wrong scope. Same trap v0.2.2 fixed in the hook. If the BOM cannot be stripped (unwritable file, no perl), promote.sh refuses and names the BOM rather than writing into a file it knows is mis-scoped.
 - **`docs/spec/*` is now in the couplings table**, and step 4 of "How to change the hook safely" names it — the gap that let a spec file describe superseded behavior as current. Each spec file carries a header stating it is a design record that may lag the code, with the hook authoritative; refinements are appended as notes rather than rewriting the record (issue #23).
 
 ## [0.2.2] — 2026-08-31
