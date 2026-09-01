@@ -481,8 +481,16 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   # window there is nothing to win: the first window alone is ≥25% of the file.
   # With this guard the worst case really is 1.25x for every file size —
   # verified by simulating the loop arithmetic over 2001..400000 lines.
+  # A FAILED count (empty, or anything non-numeric) takes the direct read too:
+  # it is the cheap, always-correct branch, and the alternative — routing a
+  # 2-line transcript through mktemp/tail/growth — silently loses the whole
+  # optimization for the common short-loop case with no correctness gain. The
+  # regex, not a bare -n, is deliberate: `[[ "$x" -le N ]]` on a non-numeric
+  # value is a bash runtime error, which under `set -u` aborts the hook mid-run
+  # with no JSON emitted. grep -c only ever yields digits or empty today, so
+  # this guards a contract, not a live bug.
   DIRECT_READ_MAX=$(( WINDOW_LINES * 4 ))
-  if [[ -n "${TOTAL_LINES:-}" && "$TOTAL_LINES" -le "$DIRECT_READ_MAX" ]]; then
+  if [[ ! "${TOTAL_LINES:-}" =~ ^[0-9]+$ || "$TOTAL_LINES" -le "$DIRECT_READ_MAX" ]]; then
     # Small enough that windowing cannot pay for itself: read it directly.
     TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
   else
@@ -530,7 +538,23 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
       if [[ "$FOUND_BOUNDARY" == "true" ]]; then
         break
       fi
-      if [[ -z "${WINDOW_ROWS:-}" || "$WINDOW_ROWS" -lt "$WINDOW_LINES" ]]; then
+      if [[ ! "${WINDOW_ROWS:-}" =~ ^[0-9]+$ ]]; then
+        # The COUNT failed, which is not the same as "tail returned short".
+        # `tail` can write a full window and the `grep -c` on that tmpfile still
+        # fail (I/O error, OOM-kill) — the same transient class this file already
+        # guards for perl and set_fm. Reading empty as "fewer lines than
+        # requested" made the loop accept an undersized, boundary-less window as
+        # final: a real <repete-done> outside it went invisible and the loop
+        # re-injected past its own exit condition. Reproduced with a grep shim
+        # failing only on the tmpfile: control tore down, fault-injected run
+        # stayed running. Third instance of one class — a support command's
+        # failure silently reinterpreted as a legitimate terminal state (after
+        # the wc -l undercount and the unchecked tail). Failure direction: read
+        # the whole file, never guess that the window was complete.
+        TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
+        break
+      fi
+      if [[ "$WINDOW_ROWS" -lt "$WINDOW_LINES" ]]; then
         # tail returned fewer lines than requested: we already read the whole
         # file. This IS the full-read result (no boundary anywhere is the
         # legitimate fresh-transcript case) — stop growing.
@@ -553,7 +577,7 @@ if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
       # TOTAL_LINES and WINDOW_ROWS are grep -c counts (never wc -l).
       PARSED_LINES=$(( PARSED_LINES + WINDOW_ROWS ))
       NEXT_WINDOW=$(( WINDOW_LINES * WINDOW_GROWTH ))
-      if [[ -n "${TOTAL_LINES:-}" && $(( (PARSED_LINES + NEXT_WINDOW) * 4 )) -gt "$TOTAL_LINES" ]]; then
+      if [[ "${TOTAL_LINES:-}" =~ ^[0-9]+$ && $(( (PARSED_LINES + NEXT_WINDOW) * 4 )) -gt "$TOTAL_LINES" ]]; then
         TURN_SCAN="$(jq -cRs "$TURN_SCAN_JQ" "$TRANSCRIPT" 2>/dev/null || echo "")"
         break
       fi

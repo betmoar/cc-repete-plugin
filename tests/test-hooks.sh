@@ -1163,6 +1163,41 @@ ck "window-scan: mismatched claim through a window bumps stale_count" \
 ck "window-scan: mismatched claim through a window feeds the rejection back" \
    'printf "%s" "$OUT" | jq -r ".reason" | grep -q "does NOT match"'
 
+echo "== window-scan: a failing window line-count falls back to the full read =="
+# Third instance of one failure class (after the wc -l undercount and the
+# unchecked tail): a support command failing, and that failure silently
+# reinterpreted as a legitimate terminal state. `tail` can write a full window
+# and the `grep -c` on that tmpfile still fail (I/O error, OOM-kill). Reading
+# the empty count as "fewer lines than requested" made the loop accept an
+# undersized, boundary-less window as final — a real <repete-done> outside it
+# went invisible. Reproduced with a grep shim failing only on the tmpfile.
+# Needs > DIRECT_READ_MAX lines so the growth loop is actually entered.
+scaffold ""
+{
+  for i in $(seq 1 17398); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'go'
+  echo
+  atext '<repete-done>all tests pass</repete-done>'
+  echo
+  for i in $(seq 1 2600); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"b%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+mkdir -p "$TMP/gbin"
+{
+  echo '#!/bin/sh'
+  echo 'for a in "$@"; do case "$a" in *repete-window.*) exit 2 ;; esac; done'
+  echo 'exec /usr/bin/grep "$@"'
+} > "$TMP/gbin/grep"
+chmod +x "$TMP/gbin/grep"
+OUT="$(PATH="$TMP/gbin:$PATH" run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: failed window count still sees the sentinel" \
+   '/usr/bin/grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "window-scan: failed window count tears down, does not re-inject" \
+   'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
+
 echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
 scaffold ""
 mktx "did some work"

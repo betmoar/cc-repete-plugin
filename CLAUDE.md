@@ -254,6 +254,12 @@ If you add a check, decide its failure direction first and write it in a comment
   ~576,000 transcript lines — the round count is identical, so the smallest fixture that
   could catch it is ~50MB. Verified by simulating the loop over 9k..5M lines. Deliberately
   not tested; if you touch the growth arithmetic, re-run that simulation.
+- **Validate every count with `^[0-9]+$`, not `-z`.** `[[ "$x" -le N ]]` on a non-numeric
+  value is a bash RUNTIME error, and under `set -u` that aborts the hook mid-run with no
+  JSON emitted at all. `grep -c` yields digits or empty today, so the regex guards a
+  contract rather than a live bug — but the block's whole fail-open story rested on that
+  implicit contract, and a busybox or minimal-container `grep` need not honour it. An
+  invalid count routes to the direct read (correct and cheap), never to a guess.
 - **Every external command the window scan depends on must fall back to the full read.**
   The pre-window hook needed only `jq`; the windowed one also needs `tail`, `grep -c` and
   `mktemp`. Each is a NEW way to lose a sentinel the old code saw — `tail` dying (ENOSPC
@@ -262,6 +268,12 @@ If you add a check, decide its failure direction first and write it in a comment
   re-injects past its own exit condition. Reproduced with a `tail` shim exiting 1: the old
   hook tore down, the windowed hook re-injected. Every such failure now reads the whole
   file instead — an optimization may never be worse than the thing it replaced.
+  THREE instances of this one class have now shipped and been caught in review: the
+  `wc -l` newline undercount, the unchecked `tail`, and a failing `grep -c` on the window
+  tmpfile being read as "tail returned short, so this window IS the file" — that last one
+  accepted an undersized boundary-less window as final and hid a real `<repete-done>`
+  outside it (reproduced with a grep shim failing only on the tmpfile). A count failing is
+  NOT the same fact as a short window; do not collapse the two.
 - **Bound CUMULATIVE window work, not the last doubling.** R growth rounds parse the SUM
   of the windows, so the waste is GEOMETRIC. The first attempt bounded only the final
   doubling (`NEXT_WINDOW >= TOTAL_LINES/2`) and a second review refuted it: on a 256k-line
