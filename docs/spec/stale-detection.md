@@ -83,6 +83,15 @@ fi
 > could never trip `paused-stale`. Only a genuinely sentinel-free turn resets. Live
 > logic: the `TURN_HAS_DONE` probe in `hooks/stop-hook.sh`'s done-check else-branch.
 
+> **Refined in v0.2.3** (issue #21): every bare `set_fm` in the snippet above is now
+> `set_fm_or_warn`. The snippet's writes discarded their return value, so on an
+> unwritable `.repete/` the hook emitted the `paused-stale` yield (or the rejection
+> note) while state stayed `running` and `stale_count` stayed 0 — meaning `stale_limit`
+> could never be reached and this whole mechanism was silently inert. The guard emits a
+> could-not-save warning instead of the claimed outcome, sets no `decision`, and exits 0.
+> The failure direction described above is unchanged: never tears down, never blocks.
+> Live logic: `set_fm_or_warn` in `hooks/stop-hook.sh`.
+
 `STALE_NOTE` (when set) is prepended to the re-inject assembly after the body and
 before the lesson catalog — it is per-turn feedback, not durable state, and carries
 no lesson-card bodies (metadata-only rule untouched).
