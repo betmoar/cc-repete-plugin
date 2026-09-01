@@ -113,6 +113,12 @@ raise `stale_limit`, fix `mission_goal`, or `/repete-cancel`.
 
 ## Prompt-code changes (coupling tax — all four sites for a new status)
 
+> Refined in v0.2.3: the two bundled skills were consolidated into a single
+> `skills/repete-loops/`. The row below naming `skills/running-repete-loops/SKILL.md` now
+> maps to that skill's §4 "Reading the yields" (`paused-stale`) and §6 "Debugging" (the
+> done-claim-ignored symptom). The coupling itself is unchanged — a status still costs a
+> skill edit; only the path moved.
+
 | Site | Change |
 | --- | --- |
 | `templates/loop.local.md` | add `stale_count: 0` and `stale_limit: 3` to frontmatter |

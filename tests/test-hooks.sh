@@ -638,11 +638,24 @@ done
 # sentinel spellings — mirror the ACTUAL contract: <repete-done> lives in the frozen
 # protocol core; <repete-checkpoint> is deliberately NOT in protocol.md (the frozen core
 # stays quiet in autonomous mode — the rule rides RULES_EXTRA). Both must appear in the
-# hook and README; each must appear in at least the running skill + one command.
-ck "doc-lock: <repete-done> in protocol + hook + README + running skill + a command" \
-   'grep -q "<repete-done>" "$ROOT/templates/protocol.md" && grep -q "<repete-done>" "$H" && grep -q "<repete-done>" "$ROOT/README.md" && grep -q "<repete-done>" "$ROOT/skills/running-repete-loops/SKILL.md" && grep -q "<repete-done>" "$ROOT/commands/repete.md"'
-ck "doc-lock: <repete-checkpoint> in hook + README + running skill + repete-continue" \
-   'grep -q "<repete-checkpoint>" "$H" && grep -q "<repete-checkpoint>" "$ROOT/README.md" && grep -q "<repete-checkpoint>" "$ROOT/skills/running-repete-loops/SKILL.md" && grep -q "<repete-checkpoint>" "$ROOT/commands/repete-continue.md"'
+# hook and README; each must appear in the skill + one command.
+ck "doc-lock: <repete-done> in protocol + hook + README + skill + a command" \
+   'grep -q "<repete-done>" "$ROOT/templates/protocol.md" && grep -q "<repete-done>" "$H" && grep -q "<repete-done>" "$ROOT/README.md" && grep -q "<repete-done>" "$ROOT/skills/repete-loops/SKILL.md" && grep -q "<repete-done>" "$ROOT/commands/repete.md"'
+ck "doc-lock: <repete-checkpoint> in hook + README + skill + repete-continue" \
+   'grep -q "<repete-checkpoint>" "$H" && grep -q "<repete-checkpoint>" "$ROOT/README.md" && grep -q "<repete-checkpoint>" "$ROOT/skills/repete-loops/SKILL.md" && grep -q "<repete-checkpoint>" "$ROOT/commands/repete-continue.md"'
+# The plugin ships exactly ONE skill. Two overlapping skills competed for the same
+# triggers (both fired on "autonomous loop"/"context rot"), so Claude consulted one and
+# silently missed the other half of the answer — and a plugin's skill descriptions sit in
+# context permanently, so the cost was paid on every session. If a second skill is ever
+# added, it must earn a genuinely disjoint trigger surface, not re-split this one by topic.
+ck "doc-lock: exactly one skill ships" \
+   '[ "$(find "$ROOT/skills" -name SKILL.md | wc -l | tr -d " ")" -eq 1 ]'
+# Reference files are the skill's second disclosure level: SKILL.md names them, so a
+# rename that misses one leaves a dangling pointer the model follows into nothing.
+for ref in context-rot gauntlet; do
+  ck "doc-lock: references/$ref.md exists and is pointed at from SKILL.md" \
+     "test -f \"\$ROOT/skills/repete-loops/references/$ref.md\" && grep -q 'references/$ref.md' \"\$ROOT/skills/repete-loops/SKILL.md\""
+done
 # frontmatter keys the docs promise
 for key in stale_count stale_limit gauntlet reference bar max_iterations context_budget_lines mission_goal; do
   ck "doc-lock: '$key' in template frontmatter + /repete scaffold prose + /repete-status" \

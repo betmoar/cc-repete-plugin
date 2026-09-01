@@ -84,19 +84,33 @@ the run.
 | `/repete-status`   | Read-only view of phase, iteration, goal, pending TODOs, lessons   |
 | `/repete-cancel`   | Deactivate the loop (state preserved for review)                   |
 
-## Skills
+## Skill
 
-The plugin bundles two skills (auto-discovered, no install step) that carry the
-operational and design judgment, so the commands stay terse:
+The plugin bundles one skill, **repete-loops** (auto-discovered, no install step),
+carrying the judgment the commands are too terse to hold. It's organized by the
+moment you're in rather than by topic:
 
-- **running-repete-loops** — *operate* a repete loop well: writing a verifiable
-  mission goal, the four memory layers (what goes where), authoring lesson cards,
-  reading the checkpoint/budget states, sane defaults. Reach for it whenever you
-  start, resume, or debug a run.
-- **designing-autonomous-loops** — *decide* whether and how to loop at all:
-  single-session re-inject vs. fresh-process vs. one-shot, and how to fight
-  context rot with memory layering. Grounded in measured rot findings. Reach for
-  it when weighing "should I loop this" or architecting a long run.
+1. **Should this be a loop at all** — repete vs. ralph vs. one-shot, decided on
+   supervision rather than taste. It will tell you not to loop, and it will point
+   at ralph for unsupervised long-haul runs.
+2. **A verifiable mission goal** — the one thing that decides whether a run
+   terminates cleanly or burns its budget.
+3. **Setting up** — the four memory layers (what goes where), the optional
+   features and why they default off, autonomous mode.
+4. **Operating** — reading the statusline, the five yields, budgets, lesson cards.
+5. **Gauntlet runs** — builder/critic rounds against a reference.
+6. **Debugging** — symptom-first: a silent loop, an ignored `<repete-done>`, a
+   safety cap you didn't set, state that looks wrong.
+
+Depth lives in `skills/repete-loops/references/` — `context-rot.md` (the measured
+evidence behind the budget thresholds and the memory-layering architecture) and
+`gauntlet.md` (round discipline and critic-packet hygiene) — loaded only when the
+question calls for them.
+
+Until v0.2.3 this shipped as two skills, `running-repete-loops` and
+`designing-autonomous-loops`. They overlapped on memory layering, gauntlet, and the
+rot rationale, and their descriptions competed for the same triggers — so Claude
+consulted one and missed the other half of the answer.
 
 ## State layout (`.repete/`, per project — `/repete` adds it to your `.gitignore`)
 

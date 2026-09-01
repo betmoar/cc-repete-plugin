@@ -81,6 +81,12 @@ to the previous round is not wasted — the gap it exposes is the next round's t
 
 ## Prompt-code changes
 
+> Refined in v0.2.3: the two bundled skills were consolidated into a single
+> `skills/repete-loops/`. The two rows below (the running skill's "Gauntlet runs" section
+> and the designing skill's one-paragraph pointer) collapse into one live site:
+> `skills/repete-loops/references/gauntlet.md`, summarized by §5 of that skill's SKILL.md.
+> The round discipline and critic-packet hygiene described below are unchanged.
+
 | Site | Change |
 | --- | --- |
 | `templates/loop.local.md` | + `gauntlet: false`, `reference: ""`, `bar: ""` |
