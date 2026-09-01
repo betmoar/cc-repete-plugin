@@ -27,16 +27,20 @@ The previous loop hit its exit goal and proposed a next payload in `.repete/tran
    in the new payload. Either way, the "Known traps" section stays a pointer (see the
    template) — never a content sink.
 4. Promote: write the approved payload into the BODY of `.repete/loop.local.md` (replace the
-   old body, keep/update frontmatter). Then update frontmatter atomically:
-   - `phase` → +1
-   - `iteration` → 1
-   - `stale_count` → 0 (the new phase starts with a clean mismatch budget — a half-accrued
-     stale run from the previous phase must not lower this phase's limit)
-   - `status` → running
-   - `active` → true
-   - `session_id` → `""` (see the note under *Resuming from a new session* below — if you are
-     continuing in a fresh chat, blanking this is what keeps the loop alive)
-   Clear `.repete/transition.md` (truncate it).
+   old body, keep the frontmatter as-is — the next step updates it mechanically). Then run:
+
+   ```
+   bash "${CLAUDE_PLUGIN_ROOT}/hooks/promote.sh" .repete/loop.local.md
+   ```
+
+   This atomically updates frontmatter in one pass — `phase` → +1, `iteration` → 1,
+   `stale_count` → 0 (the new phase starts with a clean mismatch budget — a half-accrued
+   stale run from the previous phase must not lower this phase's limit), `status` → running,
+   `active` → true, `session_id` → `""` (see the note under *Resuming from a new session*
+   below — if you are continuing in a fresh chat, blanking this is what keeps the loop alive).
+   It exits non-zero with a message naming the problem on failure (missing/unwritable state
+   file, malformed `phase`) — do NOT hand-edit frontmatter as a workaround; fix the reported
+   problem and re-run it. Then clear `.repete/transition.md` (truncate it).
 5. Begin working the new loop's exit goal immediately, same rules as before.
 
 ## status: paused-context — you just /clear-ed, rehydrate and resume

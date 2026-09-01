@@ -20,5 +20,7 @@ jobs:
         run: bash tests/test-hooks.sh
       - name: statusline tests
         run: bash tests/test-statusline.sh
+      - name: promote tests
+        run: bash tests/test-promote.sh
       - name: release gate tests
         run: node --test tests/test-release-gate.mjs

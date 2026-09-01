@@ -126,3 +126,25 @@ test("missing CHANGELOG.md fails loud", () => {
 test("extractSection: unknown version yields empty string", () => {
 	assert.equal(extractSection(GOOD_CHANGELOG, "9.9.9"), "");
 });
+
+test("issue #22: a '[LABEL]: text' callout (no URL) does not truncate the notes", () => {
+	const changelog = `# Changelog\n\n## [0.3.0] - 2026-08-31\n- fixed the login bug\n[BREAKING]: config format changed\n- this bullet must not be dropped\n\n[0.3.0]: https://example.com/x\n`;
+	const notes = extractSection(changelog, "0.3.0");
+	assert.ok(notes.includes("[BREAKING]: config format changed"), "callout line must survive");
+	assert.ok(notes.includes("this bullet must not be dropped"), "lines after the callout must survive");
+	assert.ok(!notes.includes("[0.3.0]: https://example.com/x"), "real reference block must still stop extraction");
+});
+
+test("issue #22: a '[LABEL]: text' callout as the LAST line of the section is kept", () => {
+	const changelog = `# Changelog\n\n## [0.3.0] - 2026-08-31\n- fixed the login bug\n[BREAKING]: config format changed\n\n[0.3.0]: https://example.com/x\n`;
+	const notes = extractSection(changelog, "0.3.0");
+	assert.ok(notes.endsWith("[BREAKING]: config format changed"), "callout must remain even as the trailing line");
+});
+
+test("issue #22: a real trailing reference block (URL shape) still stops the notes", () => {
+	const changelog = `# Changelog\n\n## [0.3.0] - 2026-08-31\n- fixed the login bug\n\n[0.3.0]: https://example.com/x\n[Unreleased]: https://example.com/y\n`;
+	const notes = extractSection(changelog, "0.3.0");
+	assert.ok(notes.includes("fixed the login bug"));
+	assert.ok(!notes.includes("https://example.com/x"), "real reference block must stop extraction");
+	assert.ok(!notes.includes("https://example.com/y"), "real reference block must stop extraction");
+});

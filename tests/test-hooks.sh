@@ -1174,4 +1174,81 @@ else
   echo "  SKIP: A-F01 read-only-state tests (root without runuser/nobody — cannot simulate an unwritable dir)"
 fi
 
+echo "== issue #21: unwritable .repete/ never emits a false success/pause claim =="
+# set_fm's OTHER ~10 call sites (done/paused-*/stale_count/summarizing-recovery)
+# used to discard its return value entirely: on a write failure they still
+# emitted their confident "done"/"paused"/"N consecutive claims" message and
+# exited 0, while the state on disk stayed at status:running/active:true. A
+# later Stop in the same session (once writable again) would then re-inject
+# into an unrelated turn, or the stale counter would never advance because
+# every Stop re-read 0. Reuses A-F01's RO_MODE detection.
+if [ -n "$RO_MODE" ]; then
+  ro_run21(){ # dir input
+    if [ "$RO_MODE" = direct ]; then
+      printf '%s' "$2" | CLAUDE_PROJECT_DIR="$1" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null
+    else
+      printf '%s' "$2" | runuser -u nobody -- env CLAUDE_PROJECT_DIR="$1" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null
+    fi
+  }
+
+  echo "  -- matching done-claim on unwritable state --"
+  R21="$(mktemp -d)"
+  mkdir -p "$R21/.repete"
+  scaffold ""
+  cp "$TMP/.repete/loop.local.md" "$R21/.repete/loop.local.md"
+  mktx "<repete-done>all tests pass</repete-done>"; cp "$TMP/t.jsonl" "$R21/t.jsonl"
+  chmod 755 "$R21"; chmod 644 "$R21/.repete/loop.local.md" "$R21/t.jsonl"
+  chmod 555 "$R21/.repete"
+  OUT="$(ro_run21 "$R21" "{\"transcript_path\":\"$R21/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 done: systemMessage does NOT claim completion" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"mission goal met\")" >/dev/null'
+  ck "#21 done: warning names the write failure" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  ck "#21 done: exit 0, no decision key (fail open)" 'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+  ck "#21 done: state on disk untouched (still running/active)" 'chmod 755 "$R21/.repete"; grep -qE "^status: running" "$R21/.repete/loop.local.md" && grep -qE "^active: true" "$R21/.repete/loop.local.md"; RC=$?; chmod 555 "$R21/.repete"; [ "$RC" -eq 0 ]'
+  chmod -R 755 "$R21"; rm -rf "$R21"
+
+  echo "  -- mismatched done-claim on unwritable state --"
+  R21="$(mktemp -d)"
+  mkdir -p "$R21/.repete"
+  scaffold ""
+  cp "$TMP/.repete/loop.local.md" "$R21/.repete/loop.local.md"
+  mktx "<repete-done>wrong goal</repete-done>"; cp "$TMP/t.jsonl" "$R21/t.jsonl"
+  chmod 755 "$R21"; chmod 644 "$R21/.repete/loop.local.md" "$R21/t.jsonl"
+  chmod 555 "$R21/.repete"
+  OUT="$(ro_run21 "$R21" "{\"transcript_path\":\"$R21/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 mismatch: warning names the write failure" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  ck "#21 mismatch: no persisted-count claim in systemMessage" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"consecutive done-claims\")" >/dev/null'
+  ck "#21 mismatch: exit 0, no decision key (fail open)" 'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+  ck "#21 mismatch: stale_count on disk untouched (still 0)" 'chmod 755 "$R21/.repete"; grep -qE "^stale_count: 0" "$R21/.repete/loop.local.md"; RC=$?; chmod 555 "$R21/.repete"; [ "$RC" -eq 0 ]'
+  chmod -R 755 "$R21"; rm -rf "$R21"
+
+  echo "  -- checkpoint on unwritable state --"
+  R21="$(mktemp -d)"
+  mkdir -p "$R21/.repete"
+  scaffold ""
+  cp "$TMP/.repete/loop.local.md" "$R21/.repete/loop.local.md"
+  mktx "done slice <repete-checkpoint>next: do part 2</repete-checkpoint>"; cp "$TMP/t.jsonl" "$R21/t.jsonl"
+  chmod 755 "$R21"; chmod 644 "$R21/.repete/loop.local.md" "$R21/t.jsonl"
+  chmod 555 "$R21/.repete"
+  OUT="$(ro_run21 "$R21" "{\"transcript_path\":\"$R21/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 checkpoint: no confident 'paused at checkpoint' claim" '! printf "%s" "$OUT" | jq -e ".systemMessage | test(\"repete checkpoint\")" >/dev/null'
+  ck "#21 checkpoint: warning names the write failure" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"cannot write\")" >/dev/null'
+  ck "#21 checkpoint: exit 0, no decision key (fail open)" 'printf "%s" "$OUT" | jq -e "has(\"decision\") | not" >/dev/null'
+  ck "#21 checkpoint: state on disk untouched (still running)" 'chmod 755 "$R21/.repete"; grep -qE "^status: running" "$R21/.repete/loop.local.md"; RC=$?; chmod 555 "$R21/.repete"; [ "$RC" -eq 0 ]'
+  chmod -R 755 "$R21"; rm -rf "$R21"
+
+  echo "  -- writable .repete/: behavior byte-identical to baseline (regression guard) --"
+  scaffold ""
+  mktx "<repete-done>all tests pass</repete-done>"
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 writable done: still tears loop down" 'grep -qE "^active: false" "$TMP/.repete/loop.local.md"'
+  ck "#21 writable done: still emits the completion message" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"mission goal met\")" >/dev/null'
+
+  scaffold ''
+  mktx "done slice <repete-checkpoint>next: do part 2</repete-checkpoint>"
+  OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+  ck "#21 writable checkpoint: still sets paused-checkpoint" 'grep -qE "^status: paused-checkpoint" "$TMP/.repete/loop.local.md"'
+else
+  echo "  SKIP: #21 read-only-state tests (root without runuser/nobody — cannot simulate an unwritable dir)"
+fi
+
 echo "RESULT: $pass passed, $fail failed"; [ "$fail" -eq 0 ]

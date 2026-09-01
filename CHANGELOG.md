@@ -2,6 +2,16 @@
 
 All notable changes to cc-repete are recorded here. Versions follow [semver](https://semver.org/); `.claude-plugin/plugin.json` is the single source of truth. A release is cut by pushing a `v<x.y.z>` tag — the release workflow gates `tag == plugin.json == newest CHANGELOG heading` and publishes the CHANGELOG section as the release body.
 
+## [0.2.3] — 2026-09-01
+
+### Fixed
+- **A pause or teardown the hook decided could be reported without ever being saved.** With `.repete/` unwritable, `set_fm`'s failure was discarded by every call site except the two blocking ones: the hook printed "✅ mission goal met — loop complete" while state on disk still read `active: true / status: running`, and a later Stop in the same session then hijacked an unrelated turn with a re-inject. The same shape hit every `paused-*` status and both `stale_count` writes — and because the count never persisted, `stale_limit` could never be reached, silently defanging the false-done-claim safety net. Reproduced on v0.2.1 and v0.2.2. `set_fm_or_warn` now guards every write whose message promises persistence: on failure it names the write problem instead of claiming the outcome, sets no `decision`, and exits 0. Still fail-open — no new blocking path (issue #21).
+- **Release notes truncated at a `[LABEL]: text` changelog callout.** v0.2.2 narrowed `extractSection`'s stop pattern to the reference shape `[label]: `, which still matches an ordinary body line like `[BREAKING]: config format changed` — dropping it and every line after it from the published release body, with the gate reporting OK. The stop now requires a real URL (`[label]: scheme://…`), choosing the cheap failure direction: keeping one extra body line beats silently losing content (issue #22).
+
+### Added
+- **`hooks/promote.sh`** — checkpoint promotion is mechanical instead of prompt-code. `/repete-continue` step 4 used to instruct the agent to hand-edit six frontmatter keys, where a single miss silently killed or miscounted the resumed loop; it now shells out to one atomic awk pass. Unlike the Stop hook, promote.sh fails LOUD — it is human-gated, so a silent partial write is the defect, not the safe direction. Covered by a new `tests/test-promote.sh` (33 assertions), wired into run-all.sh, CI, and the release workflow (issue #8).
+- **`docs/spec/*` is now in the couplings table**, and step 4 of "How to change the hook safely" names it — the gap that let a spec file describe superseded behavior as current. Each spec file carries a header stating it is a design record that may lag the code, with the hook authoritative; refinements are appended as notes rather than rewriting the record (issue #23).
+
 ## [0.2.2] — 2026-08-31
 
 ### Fixed
@@ -54,7 +64,8 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 ### Changed
 - **Docs hardened to match the code.** The couplings table gained rows (stale keys, gauntlet keys, statusline markers, sentinel spellings) and the landmine list grew (STALE_NOTE init-outside-guard, fm() first-key trap, GAUNTLET_FALLBACK mirror). Release notes, specs, README, skills, and commands were swept for drift by three review rounds; a doc-lock test block now enforces the mechanical half of the couplings table, and a golden-SHA test locks the default re-inject byte-for-byte.
 
-[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/betmoar/cc-repete-plugin/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/betmoar/cc-repete-plugin/compare/v0.1.4...v0.2.0

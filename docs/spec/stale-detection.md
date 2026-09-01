@@ -1,5 +1,9 @@
 # Spec: stale detection — false done-claim feedback + `paused-stale` yield
 
+> **Design record — may lag the code. `hooks/stop-hook.sh` is authoritative.** This file
+> records what was approved and why, not what ships today. Refinements are appended as
+> `> Refined in vX.Y.Z` notes pointing at the live logic; the original text is left standing.
+
 Status: approved design (brainstorm `wf_6b69cf34-90a`, operator interview 2026-08-16).
 Source: Gauntlet-loop engineering ideas (Prompt Index guide), filtered through this
 repo's fail-open rule and couplings table.

@@ -177,6 +177,26 @@ set_fm() { # key value  (atomic update of a key ONLY within the first frontmatte
 
 emit() { jq -n --arg m "$1" '{systemMessage:$m}'; }
 
+# set_fm_or_warn: guard for every set_fm call whose caller is about to emit a
+# message that IMPLICITLY PROMISES the write landed (done/paused-*/stale_count/
+# the stranded-summarizing recovery). Two call sites (budget pass-1, the
+# iteration bump) already guarded set_fm directly before this helper existed —
+# this generalizes that pattern to the rest instead of leaving them to discard
+# the return value, print a confident success message, and exit 0 while state
+# on disk stayed unchanged (issue #21: state read "active: true / status:
+# running" after a reported mission-complete).
+# Failure direction: on write failure, NEVER emit the caller's claimed outcome
+# (done/paused/reset) and NEVER set decision:block — emit a warning that names
+# the write failure and what it means (state could not be saved), then exit 0
+# immediately so the Stop is let through untouched. This mirrors the two
+# pre-existing F01 guarded sites; it must never become a new path that blocks.
+set_fm_or_warn() { # key value
+  if ! set_fm "$1" "$2"; then
+    emit "⚠️ repete: cannot write .repete/loop.local.md (read-only? disk full?) — the loop's state could NOT be saved, so nothing was actually torn down, paused, or counted. This Stop is allowed through as a plain pass-through. Fix the write problem, then /repete-continue."
+    exit 0
+  fi
+}
+
 # ---- lesson catalog helpers ----------------------------------------------
 # Read one frontmatter value from a lesson card. The card template carries a
 # leading <!-- ... --> comment BEFORE its '---' block, so key off the first
@@ -420,16 +440,16 @@ if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]
   DONE="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /.*<repete-done>(.*?)<\/repete-done>/s' 2>/dev/null)"
   if [[ -n "$DONE" ]]; then
     if [[ "$(norm "$DONE")" == "$(norm "$MISSION_GOAL")" ]]; then
-      set_fm status "done"
-      set_fm active false
+      set_fm_or_warn status "done"
+      set_fm_or_warn active false
       emit "✅ repete: mission goal met — loop complete after phase ${PHASE}. State left in .repete/ for review."
       exit 0
     # Mismatched done-claim: count it, tell the agent why it was rejected.
     elif [[ "$STALE_LIMIT" -gt 0 ]]; then
       STALE=$((STALE + 1))
-      set_fm stale_count "$STALE"
+      set_fm_or_warn stale_count "$STALE"
       if [[ "$STALE" -ge "$STALE_LIMIT" ]]; then
-        set_fm status paused-stale
+        set_fm_or_warn status paused-stale
         emit "🧭 repete: ${STALE} consecutive done-claims did not match the mission goal (limit ${STALE_LIMIT}, phase ${PHASE}). The loop may be spinning on a false claim of done. Review .repete/MISSION.md: fix the goal string, edit stale_limit, reset stale_count and /repete-continue — or /repete-cancel."
         exit 0
       fi
@@ -449,7 +469,12 @@ if [[ $HAS_CHECKPOINT -eq 0 && -n "$MISSION_GOAL" && "$MISSION_GOAL" != "null" ]
     TURN_HAS_DONE=0
     printf '%s' "$TURN_TEXT_ALL" | perl -0777 -ne 'exit(/<repete-done>.*?<\/repete-done>/s ? 0 : 1)' 2>/dev/null && TURN_HAS_DONE=1
     if [[ "$STALE" -gt 0 && "$TURN_HAS_DONE" -eq 0 ]]; then
-      set_fm stale_count 0
+      # Guarded like the bump write above (issue #21): a reset that silently
+      # fails to persist means the on-disk counter stays stuck above 0 while
+      # every later Stop keeps computing from an in-memory 0 — the same
+      # "state and reality disagree" shape the bump guard exists for, just
+      # with no confident message attached until now.
+      set_fm_or_warn stale_count 0
       STALE=0
     fi
   fi
@@ -459,7 +484,7 @@ fi
 if [[ $HAS_CHECKPOINT -eq 1 ]]; then
   PAYLOAD="$(printf '%s' "$LAST_OUTPUT" | perl -0777 -ne 'print "$1" if /.*<repete-checkpoint>(.*?)<\/repete-checkpoint>/s' 2>/dev/null)"
   printf '%s\n' "$PAYLOAD" > "$TRANSITION_FILE"
-  set_fm status paused-checkpoint
+  set_fm_or_warn status paused-checkpoint
   emit "⏸ repete checkpoint (phase ${PHASE}, iteration ${ITERATION}). Proposed next payload → .repete/transition.md. Review/edit it, then /repete-continue to launch the next loop, or /repete-cancel to stop."
   exit 0
 fi
@@ -474,7 +499,7 @@ fi  # end: sentinel handling suppressed while 'summarizing'
 # an empty handoff and lose the in-flight delta. The budget two-step below owns
 # this Stop; the cap re-applies normally once the loop returns to 'running'.
 if [[ "$STATUS" != "summarizing" && "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
-  set_fm status paused-max
+  set_fm_or_warn status paused-max
   emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
   exit 0
 fi
@@ -492,7 +517,7 @@ if [[ "$CTX_BUDGET" -gt 0 && -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
   LINES="$(wc -l < "$TRANSCRIPT" 2>/dev/null | tr -d ' ')"
   if [[ "${LINES:-0}" -gt "$CTX_BUDGET" ]]; then
     if [[ "$STATUS" == "summarizing" ]]; then
-      set_fm status paused-context
+      set_fm_or_warn status paused-context
       # Treat a handoff as "saved" only if the agent actually FILLED it. A bare
       # -s/non-whitespace test would pass a copied-but-unfilled template, since
       # the template's HTML comment, "## headings" and "<placeholder>" lines are
@@ -570,14 +595,14 @@ fi
 # budget disabled). Clear the transient status so we don't take the pass-2
 # paused-context path on a future trip without first writing a fresh handoff.
 if [[ "$STATUS" == "summarizing" ]]; then
-  set_fm status running
+  set_fm_or_warn status running
   STATUS=running
   # The max-iterations yield above was skipped because status was 'summarizing'.
   # Now that we've returned to 'running', re-apply it here so a cap reached
   # during the handoff is still enforced on THIS Stop — otherwise the loop would
   # run one cycle past the configured cap before the next Stop catches it.
   if [[ "$MAX_ITER" -gt 0 && "$ITERATION" -ge "$MAX_ITER" ]]; then
-    set_fm status paused-max
+    set_fm_or_warn status paused-max
     emit "🛑 repete: max_iterations (${MAX_ITER}) reached in phase ${PHASE}. Loop paused. /repete-continue to push the cap and resume, or /repete-cancel."
     exit 0
   fi

@@ -92,6 +92,16 @@ tearing the loop down on a false positive. Concrete embodiments:
   bumped, so no budget could fire — reproduced). Blocking is only allowed when progress
   can be persisted. The warning repeats while writes keep failing (no marker can be
   written either) — noisy, never trapping.
+- **A decision the hook really made must be PERSISTED, or the message must not claim it**
+  (v0.2.3, issue #21). The mirror of the sentinel rule below. ~10 `set_fm` calls — `done`
+  + `active false`, both `stale_count` writes, every `paused-*`, the stranded-`summarizing`
+  recovery — discarded the return value and printed a confident outcome regardless. On a
+  read-only `.repete/` the user was told "mission goal met" while state stayed
+  `active: true / status: running`, and a later Stop hijacked an unrelated turn
+  (reproduced on v0.2.1 and v0.2.2). `set_fm_or_warn` generalizes the guard the two F01
+  sites already had. Failure direction: never emit the claimed outcome, never set
+  `decision:block`, warn that state could not be saved, exit 0. It must never become a
+  new blocking path — that is the one thing this fix could get wrong.
 - **A turn whose done-claim sits in an EARLIER text entry is NEUTRAL** (audit F03): the
   last text entry still wins (locked v0.2.1 semantics — no teardown, no count), but such
   a turn no longer RESETS `stale_count` — pre-fix, an agent that habitually appended text
@@ -119,9 +129,12 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the test coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md" |
 | Sentinel strings | Hook + README always; `<repete-done>` also protocol + running skill + /repete; `<repete-checkpoint>` also running skill + /repete-continue (NOT protocol.md — the frozen core stays quiet; the rule rides RULES_EXTRA) | tests: doc-lock block |
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
+| `hooks/promote.sh` keys or behavior | `commands/repete-continue.md` step 4 invocation, `tests/test-promote.sh`, and the frontmatter-schema row above (promote writes 6 of those keys) | test: `tests/test-promote.sh` |
+| A new test suite file under `tests/` | `tests/run-all.sh` AND `.github/workflows/ci.yml` AND `.github/workflows/release.yml` — three sites, all by hand | not enforced — a suite missing from CI passes locally and never runs on a tag |
 | Transcript scan shape (`$turn_start`, text-bearing pick) | The #18 test block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, `tool_result`+text mixed, sidechain | tests: `#18` blocks |
 | `.repete/.warned-nojq` marker path | Hook no-jq branch + the warning text that names it for deletion | tests: `#7` blocks |
 | Hook behavior described in README/commands/skills | The prose in all three | not enforced — grep manually |
+| Behavior a `docs/spec/*` file describes (`stale-detection.md` for `stale_count`/`stale_limit`, `gauntlet-mode.md` for `gauntlet`/`reference`/`bar`) | Add a `> Refined in vX.Y.Z` note to the spec section the change supersedes, pointing at the live logic — do NOT rewrite the record | not enforced — grep manually; the spec is a design record, the hook is authoritative |
 | `tests/run-all.sh` checks | `.github/workflows/ci.yml` AND `.github/workflows/release.yml` (three sites, all by hand) | not enforced — keep in sync by hand |
 | Default re-inject content (protocol wording, rules, assembly) | `tests/golden-default-reinject.sha` — regenerate with `bash tests/regen-golden.sh` (its fixture mirrors the golden test block; keep both in sync) | test: golden block |
 | `plugin.json` version | Newest `## [x.y.z]` CHANGELOG heading + README version line + the release tag | `scripts/release-gate.mjs` at tag push; `tests/test-release-gate.mjs` |
@@ -163,6 +176,13 @@ If you add a check, decide its failure direction first and write it in a comment
   pre- and post-v0.2.1 hooks inject zero body lines there. Do not "improve" this by
   guessing where the split belongs: a heuristic that promotes body prose into live
   frontmatter is the strictly worse failure.
+- **`hooks/promote.sh` fails LOUD — the opposite of the hook's one rule, deliberately.**
+  It is human-gated (invoked once from `/repete-continue` after the user approved the
+  payload), not an unattended Stop path, so a silent partial write IS the defect issue #8
+  exists to fix: non-zero exit plus a message naming what could not be written. Do not
+  harmonize it with `set_fm`'s fail-open direction. It mirrors `set_fm`'s C1/C2/C3 and
+  #11 guarantees, generalized to six keys in one awk pass; it does NOT touch the body —
+  the payload replace stays a Write the calling command performs.
 - **Iteration semantics:** `iteration` counts completed work turns; the cap check is
   `>=` *before* the bump, so `max_iterations: 3` = exactly 3 work turns. The handoff
   (`summarizing`) turn is free — no bump.
@@ -228,7 +248,12 @@ If you add a check, decide its failure direction first and write it in a comment
 3. `bash tests/run-all.sh` — all suites plus shellcheck must be green. If you changed
    the default re-inject deliberately, `bash tests/regen-golden.sh` and commit the new
    sha WITH the change.
-4. Grep commands/README/skills for descriptions of the behavior you changed.
+4. Grep commands/README/skills **and `docs/spec/`** for descriptions of the behavior you
+   changed. The spec files are approved-design records, not prompt-code — they do not
+   execute, so the failure mode is a maintainer reading superseded behavior as current
+   while chasing a bug (that is how the F03 stale-reset drift survived until a review
+   round caught it). Append a `> Refined in vX.Y.Z` note naming the live logic; never
+   rewrite the record to match the code.
 5. Bump `version` in `.claude-plugin/plugin.json`, the README's version line, AND add
    the matching `## [x.y.z]` entry newest in CHANGELOG.md — the release is tag-driven
    (`.github/workflows/release.yml` + `scripts/release-gate.mjs`) and the gate fails any
@@ -236,9 +261,12 @@ If you add a check, decide its failure direction first and write it in a comment
 
 ## Residual risks / backlog (prioritized, with context)
 
-1. **`/repete-continue`'s checkpoint promotion is prompt-code** — the agent hand-edits
-   frontmatter (phase +1, iteration reset, blank session). A `hooks/promote.sh` the
-   command shells out to would make it mechanical and testable. Medium effort.
+1. **~~Checkpoint promotion is prompt-code~~ — SHIPPED v0.2.3 (issue #8).** `hooks/promote.sh`
+   now writes all six keys in one atomic awk pass and `/repete-continue` step 4 shells out
+   to it. Residue: the other three resume branches (`paused-context`, `paused-stale`,
+   `paused-max`) still hand-edit `status` → running and blank `session_id` — a strict
+   subset of what promote.sh writes. A `--resume-only` flag would fold them in; not done,
+   because those branches also require a human judgment step promote.sh cannot encode.
 2. **Transcript parse trusts `.message.role` / `.type` shape.** v0.2.1 leans on it
    harder: the turn boundary is "last main-thread `role:user` entry that is not purely
    `tool_result` blocks". If the transcript format changes upstream, the boundary

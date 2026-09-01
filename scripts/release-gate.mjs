@@ -37,7 +37,18 @@ export function extractSection(changelogText, version) {
 	// test must match the reference SHAPE ("[label]: url"), not any line that
 	// merely starts with '[' — a body line like "[MEASURED: …] note" would
 	// silently truncate the published release notes (2026-08-31 audit F07).
-	const stop = /^## \[|^\[[^\]]+\]:\s/m.exec(rest);
+	//
+	// F07's fix narrowed the shape to "[label]: " (colon-space) but that still
+	// matches an ordinary changelog callout like "[BREAKING]: config format
+	// changed" — a body line, not a reference definition — and silently
+	// dropped it and everything after it (issue #22). Require the URL shape
+	// instead: real link-reference definitions are "[label]: scheme://...".
+	// This chooses the cheap failure direction (dropping content is expensive,
+	// keeping one extra body line is cheap) over faithfully detecting the
+	// trailing reference block. It still cannot distinguish a body line that
+	// itself genuinely reads "[label]: https://…" from a real reference
+	// definition — that shape is rare enough in changelog prose to accept.
+	const stop = /^## \[|^\[[^\]]+\]:\s*\S+:\/\//m.exec(rest);
 	return (stop ? rest.slice(0, stop.index) : rest).trim();
 }
 
