@@ -1097,6 +1097,72 @@ ck "window-scan: failing tail still sees the sentinel (falls back to full read)"
 ck "window-scan: failing tail tears down, does not re-inject" \
    'printf "%s" "$OUT" | jq -e "has(\"decision\")|not" >/dev/null'
 
+echo "== window-scan: the early exit actually fires (window used, full file NOT re-read) =="
+# The whole point of the window is: find the turn boundary in a small tail and
+# STOP — never parse the whole transcript. Every other window test asserts the
+# ANSWER, which is identical whether the early exit fires or the loop falls
+# through to a full read, so a regression that silently disables the early exit
+# (a renamed .found field, a changed jq output shape) would degrade every Stop
+# back to a full read with the suite still green. Verified: mutating
+# FOUND_BOUNDARY to a constant "false" leaves all other window assertions
+# passing.
+# The signal is an INVOCATION COUNT, not wall-clock: a jq shim on PATH logs
+# whether jq was ever handed the transcript path itself. Early exit => jq only
+# ever sees the tmpfile window. Immune to machine speed, so it cannot flake.
+# 20k lines with the boundary 500 from EOF: too big for the direct-read guard,
+# boundary well inside the first 2000-line window.
+scaffold ""
+{
+  for i in $(seq 1 19498); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'the boundary'
+  echo
+  atext 'working on it'
+  echo
+  for i in $(seq 1 500); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"b%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+} > "$TMP/t.jsonl"
+mkdir -p "$TMP/jqbin"
+REAL_JQ="$(command -v jq)"
+{
+  echo '#!/bin/sh'
+  echo 'for a in "$@"; do case "$a" in *t.jsonl) echo "$a" >> "$JQLOG" ;; esac; done'
+  echo "exec $REAL_JQ \"\$@\""
+} > "$TMP/jqbin/jq"
+chmod +x "$TMP/jqbin/jq"
+rm -f "$TMP/jqlog"
+OUT="$(JQLOG="$TMP/jqlog" PATH="$TMP/jqbin:$PATH" run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: early exit fires — jq never re-reads the whole transcript" \
+   'test "$(grep -c "t.jsonl" "$TMP/jqlog" 2>/dev/null || echo 0)" -eq 0'
+ck "window-scan: early-exit turn still re-injects normally" \
+   'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== window-scan: stale_count and the .a view still work through a grown window =="
+# Every other window assertion checks only status/active/decision. The scan
+# emits TWO views from one jq program — .l (the sentinel-bearing entry) and .a
+# (every text entry of the turn, used to tell "no sentinel at all" from "sentinel
+# in an earlier entry", the F03 rule). A window regression could break one view
+# and not the other, and nothing would notice. Exercise both at a size that
+# actually windows.
+scaffold ""
+setstate stale_limit 3
+{
+  for i in $(seq 1 19000); do
+    printf '{"message":{"role":"assistant","content":[{"type":"tool_use","id":"a%d","name":"Bash","input":{}}]}}\n' "$i"
+  done
+  uprompt 'go'
+  echo
+  atext '<repete-done>a goal that does not match</repete-done>'
+  echo
+} > "$TMP/t.jsonl"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "window-scan: mismatched claim through a window bumps stale_count" \
+   'grep -qE "^stale_count: 1" "$TMP/.repete/loop.local.md"'
+ck "window-scan: mismatched claim through a window feeds the rejection back" \
+   'printf "%s" "$OUT" | jq -r ".reason" | grep -q "does NOT match"'
+
 echo "== #10: set_fm writes a value containing a literal backslash unchanged =="
 scaffold ""
 mktx "did some work"

@@ -240,6 +240,20 @@ If you add a check, decide its failure direction first and write it in a comment
   Both counters (fast-path `TOTAL_LINES`, loop `WINDOW_ROWS`) use `grep -c ''` so they
   cannot drift apart again. Measured on 37.9MB/100k lines: `grep -c` 0.00s, `wc -l`
   0.04s, `awk END{NR}` 0.76s — the safe counter is also the fastest.
+- **Test the window's MECHANISM, not just its answer.** Every window assertion that checks
+  `status`/`decision` passes identically whether the early exit fired or the loop fell
+  through to a full read — so a regression that silently disables the early exit (renamed
+  `.found`, changed jq output shape) degrades every Stop back to a full read with the suite
+  green. Proven: mutating `FOUND_BOUNDARY` to a constant `false` left all 12 window
+  assertions passing. The lock is an INVOCATION COUNT, not wall-clock — a `jq` shim on
+  PATH logs whether jq was ever handed the transcript path itself; early exit means it only
+  ever sees the tmpfile window. Immune to machine speed, so it cannot flake. Use that
+  technique for any future "did the fast path actually fire" question.
+  KNOWN UNTESTED: whether `PARSED_LINES` accumulates across rounds. Mutating it to
+  `PARSED_LINES=$WINDOW_ROWS` (last round only) changes no observable behavior below
+  ~576,000 transcript lines — the round count is identical, so the smallest fixture that
+  could catch it is ~50MB. Verified by simulating the loop over 9k..5M lines. Deliberately
+  not tested; if you touch the growth arithmetic, re-run that simulation.
 - **Every external command the window scan depends on must fall back to the full read.**
   The pre-window hook needed only `jq`; the windowed one also needs `tail`, `grep -c` and
   `mktemp`. Each is a NEW way to lose a sentinel the old code saw — `tail` dying (ENOSPC
