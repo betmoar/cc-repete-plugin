@@ -140,13 +140,13 @@ If you add a check, decide its failure direction first and write it in a comment
 
 | You changed | You must also update | Enforced by |
 | --- | --- | --- |
-| `templates/handoff.md` section headings | Hook pass-1 re-inject brief AND pass-2 scaffolding-strip pattern | test: "Coupling lock: handoff headings" |
+| `templates/handoff.md` section headings | Hook pass-1 re-inject brief AND pass-2 scaffolding-strip pattern | test: "Coupling lock: templates/handoff.md headings match the hook's scaffolding-strip list" |
 | `templates/protocol.md` placeholders | Hook substitution + `PROTO_FALLBACK` | test: "Protocol placeholders" |
 | `loop.local.md` frontmatter keys | Hook `fm` reads, `commands/repete.md` scaffold, `/repete-status`, test `scaffold()` | tests use the schema throughout |
 | Status values | Hook early-exit case, `/repete-continue` branches, `/repete-status` map, statusline `case` (renders `·ck/·ctx/·max/·stale` markers — a new status silently renders as healthy) | tests: paused/terminal blocks |
 | `stale_count`/`stale_limit` keys | Hook `fm` reads + mismatch branch, `templates/loop.local.md`, `/repete` scaffold prose, `/repete-status` budgets line, `/repete-continue` paused-stale branch | tests: stale blocks |
 | `gauntlet`/`reference`/`bar` keys | Hook `fm` read + gauntlet injection block, `templates/loop.local.md`, `/repete` optional-features, `/repete-status` gauntlet section, tests scaffold comment | tests: gauntlet blocks |
-| `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: gauntlet" |
+| `templates/gauntlet.md` content | Hook injection + `GAUNTLET_FALLBACK` + the coupling-lock phrases (`parts.md`, `critic`, `final integration`) | test: "Coupling lock: templates/gauntlet.md carries the phrases the tests grep" |
 | Sentinel strings | Hook + README always; `<repete-done>` also protocol + `skills/repete-loops/SKILL.md` + /repete; `<repete-checkpoint>` also that skill + /repete-continue (NOT protocol.md — the frozen core stays quiet; the rule rides RULES_EXTRA) | tests: doc-lock block |
 | Adding a second skill under `skills/` | Nothing mechanical — but the plugin ships exactly ONE by design (v0.2.3), locked by test. Two skills competed for the same triggers, so Claude consulted one and silently missed the other half; descriptions sit in context every session. A second skill must earn a genuinely disjoint trigger surface | test: "exactly one skill ships" |
 | `skills/repete-loops/references/*.md` filenames | The pointers in that skill's SKILL.md (§1, §5, closing list) — a missed rename is a dangling path | test: doc-lock references |
@@ -323,8 +323,8 @@ carry the history.
    (#14, spec-only by design — promotion needs cross-project recurrence data that does
    not exist yet; shipping early would promote on noise). Proposals, not approved designs.
 5. **Per-Stop scan cost SHIPPED (#9)** — windowed scan; see the window landmines.
-   Measured: 100k-line 0.85s → 0.14s; deep-boundary cases within +0.17s of old; the
-   cited ~2.8s never reproduced. Residue: `fm()` fork count (~60/Stop) is
+   Measured: 100k-line 0.85s → 0.14s; deep-boundary overhead is size-dependent —
+   40k +0.04s, 256k +0.17s (the worst case); the cited ~2.8s never reproduced. Residue: `fm()` fork count (~60/Stop) is
    millisecond-scale — batch opportunistically, never urgently.
 6. **Multi-entry-turn visibility SETTLED (#24, 2026-09-03): last-entry-wins STAYS** —
    measured 756 sessions: 85% visible / 15% invisible; of earlier-claim turns 70%

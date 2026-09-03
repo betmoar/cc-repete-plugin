@@ -174,7 +174,8 @@ constitution, and the frozen protocol, keeping each iteration quiet:
 When `lessons_enabled` is on and the agent hits a dead-end or a fix that didn't work, it writes a
 **lesson card** to `.repete/lessons/` (see `templates/lesson-card.md`): situation → tried →
 outcome → rule, tagged for retrieval. Cards are project-local in v1; recurrence-gated promotion to
-a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled` turns on the
+a global `~/.config/cc-repete/lessons/` store is the v3 design
+(`docs/spec/global-lesson-store.md`). Likewise `todo_next_enabled` turns on the
 "log out-of-scope finds to `todo-next.md`" rule. Both are off by default.
 
 ## Requirements
@@ -211,5 +212,6 @@ the full test suite, and publishes the CHANGELOG section as the release body.
 ## Roadmap
 
 - **v2** — mission as N named phases; `transition.md` advances a declared phase plan.
-- **v3** — cross-project lessons in `~/.claude/repete/`, recurrence-gated promotion, a
-  consolidation pass (dedup/generalize/age-out) to keep the library retrieval-sharp.
+- **v3** — cross-project lessons in `~/.config/cc-repete/lessons/`, recurrence-gated
+  promotion (a lesson promoted only after N distinct projects hit it), local cards win
+  on collision — design in `docs/spec/global-lesson-store.md`.
