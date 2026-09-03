@@ -960,6 +960,54 @@ mkrows "$(uprompt 'real prompt')" \
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "#18: sidechain user row is not a boundary" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
 
+echo "== #24: real-transcript evidence — last-entry-wins STAYS (decision locked) =="
+# The open design question (issue #24) was whether to join ALL of a turn's text
+# entries for sentinel detection so a claim in an earlier entry is honored. Settled
+# 2026-09-03 by measuring real transcripts (756 local .claude/projects sessions,
+# 55,676 main-thread entries, 1,482 text-bearing turns; boundary predicate = the
+# hook's own "user row with a non-tool_result block"):
+#   turns claiming done (done-ish phrases):     209
+#     hook sees the claim (last text entry):    178  (85%)
+#     claim sits in an earlier text entry:       31  (15%)
+#   Of multi-entry turns where an EARLIER entry claims and the last doesn't (33):
+#     later text retracts/qualifies the claim:  23  (70%)  <- "actually, still fails"
+#     later text is neutral wrap-up:             10  (30%)  <- "committing now"
+# DECISION: joining all entries would honor the 30% at the cost of tearing down on
+# the 70% — claims walked back in later text would END loops (the expensive
+# direction v0.2.1 locked against). The 15% invisible-claim loss is real but the
+# cheaper failure (burns iterations to a budget; stale detector still fires on a
+# REPEATED claim; the human sees every yield). Mitigation shipped with the same
+# evidence: `last_assistant_message` exists in Stop hook input (measured 2026-09-03,
+# field list: background_tasks/cwd/effort/hook_event_name/last_assistant_message/
+# permission_mode/prompt_id/session_crons/session_id/stop_hook_active/transcript_path)
+# — a future switch to reading IT instead of the transcript must preserve BOTH
+# directions pinned below. The two assertions re-state the decision mechanically.
+
+echo "== #24: decision lock — a retraction AFTER a claim must not tear down =="
+# The 70% case from the measurement: claim, then later text walks it back. Join-all
+# would end this loop; the locked semantics keep it running with stale feedback.
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" \
+       "$(atext 'actually wait — the tests still fail, one more fix needed')" \
+       "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#24: retraction after claim -> no teardown (70% case)" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "#24: retraction after claim -> loop continues (block)" 'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== #24: decision lock — neutral wrap-up after a claim also does not tear down =="
+# The 30% case: a correct claim followed by unrelated closing text stays invisible
+# by the same rule. Documented cost, accepted: the loop burns to a budget with zero
+# feedback rather than ending on a walked-back claim. If this trade is ever reversed,
+# BOTH this block and the retraction block above must flip together — they are the
+# measured 70/30 split, not independent choices.
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" \
+       "$(atext 'committing the branch now, summary follows in the report')" \
+       "$(atool)"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#24: wrap-up after claim -> no teardown (30% case)" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
+ck "#24: wrap-up after claim -> loop continues (block)"  'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
 echo "== #18: no user row at all -> scan everything (pre-existing scope) =="
 scaffold ""
 mkrows "$(atext '<repete-done>all tests pass</repete-done>')" "$(atool)"

@@ -166,7 +166,7 @@ If you add a check, decide its failure direction first and write it in a comment
 | The state-file read API siblings grep for (path `.repete/loop.local.md`, key `active`, value form `true` in the FIRST frontmatter block)             | Nothing in-tree — but cc-reload's `repete_active()` greps it to stand down, so a rename/move/value-shape change breaks a sibling silently. Update core-load-bearing item 6 and notify the sibling repo. Do not "fix" the divergence by loosening our own reads — their bare grep matching body prose is their bug                                                                                            | test: `#27` contract blocks                                                              |
 | The scan jq program (`TURN_SCAN_JQ`)                                                                                                                | Nothing — it is defined ONCE and reused by all three paths (fast path, mktemp-failure fallback, growth loop). It was three verbatim copies; if you ever re-inline it, the paths can silently disagree                                                                                                                                                                                                               | tests: window-scan blocks + the `#18` blocks                                         |
 | Window sizing (`WINDOW_LINES`, `WINDOW_GROWTH`)                                                                                                     | Nothing mechanical — but the initial size must stay comfortably above the documented 500-sidechain hazard, and the growth predicate must stay "contains a turn boundary" (see landmine)                                                                                                                                                                                                                             | tests: window-scan blocks                                                            |
-| Transcript scan shape (`$turn_start`, text-bearing pick)                                                                                            | The #18 test block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, `tool_result`+text mixed, sidechain                                                                                                                                   | tests: `#18` blocks                                                                  |
+| Transcript scan shape (`$turn_start`, text-bearing pick)                                                                                            | The #18 test block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, `tool_result`+text mixed, sidechain. PLUS the #24 decision-lock block (retraction/wrap-up after a claim → no teardown — the measured 70/30 split) and the Stop-input field list (incl. `last_assistant_message`, no token field) | tests: `#18` + `#24` blocks                                                          |
 | `.repete/.warned-nojq` marker path                                                                                                                  | Hook no-jq branch + the warning text that names it for deletion                                                                                                                                                                                                                                                                                                                                                     | tests: `#7` blocks                                                                   |
 | Hook behavior described in README/commands/skills                                                                                                   | The prose in all three                                                                                                                                                                                                                                                                                                                                                                                              | not enforced — grep manually                                                         |
 | Behavior a `docs/spec/*` file describes (`stale-detection.md` for `stale_count`/`stale_limit`, `gauntlet-mode.md` for `gauntlet`/`reference`/`bar`) | Add a `> Refined in vX.Y.Z` note to the spec section the change supersedes, pointing at the live logic — do NOT rewrite the record                                                                                                                                                                                                                                                                                  | not enforced — grep manually; the spec is a design record, the hook is authoritative |
@@ -394,11 +394,21 @@ If you add a check, decide its failure direction first and write it in a comment
    `tool_result` blocks". If the transcript format changes upstream, the boundary
    degrades to "scan everything" (the pre-v0.2.1 scope, fail-open) — but watch Claude
    Code release notes, and re-check `hooks/stop-hook.sh`'s `$turn_start` if the shape
-   of user/tool_result entries moves.
-3. **`context_budget_lines` counts transcript lines, not tokens** (issue #15) — documented as a
-   loose proxy. If a tokens-ish signal becomes available in hook input, prefer it.
+   of user/tool_result entries moves. **Escape hatch measured 2026-09-03**: Stop input
+   carries `last_assistant_message` (final assistant text of the turn, harness-provided)
+   — the documented alternative if the transcript shape ever moves. Field list pinned
+   in the `#24` test block. No token/context field exists as of that measurement.
+3. **~~`context_budget_lines` counts transcript lines, not tokens~~ — SETTLED (issue #15,
+   2026-09-03).** Stop hook input carries no token/context field (measured; field list
+   pinned in the `#24` test block), and bytes-per-line spans 1.1–15.7 KB across real
+   transcripts, so bytes are the same noise at a larger unit. Lines stay. Decision record:
+   `docs/spec/stale-detection.md` appendix. Reopen only if the harness ships a tokens field.
 4. **v2/v3 roadmap** (README, issues #13/#14): phased missions; global lesson store with
-   recurrence-gated promotion. The state model was designed to extend to both.
+   recurrence-gated promotion. **Evaluable specs now exist** (2026-09-03):
+   `docs/spec/phased-missions.md` (#13, implementable — acceptance criteria testable),
+   `docs/spec/global-lesson-store.md` (#14, spec-only by design — the promotion gate
+   needs cross-project recurrence data that does not exist yet; shipping the store
+   before the data would promote on noise). Both are proposals, not approved designs.
 5. **~~Per-Stop transcript cost is O(whole transcript)~~ — SHIPPED (issue #9).** The scan
    now grows a `tail -n` window until it contains a turn boundary; see the three window
    landmines (boundary predicate, `grep -c` not `wc -l`, cumulative growth bound).
@@ -408,15 +418,17 @@ If you add a check, decide its failure direction first and write it in a comment
    deep-boundary 0.39s → 0.43s; 256k deep-boundary 2.16s → 2.33s. The issue's cited ~2.8s
    never reproduced here; RSS did. Residue: the `fm()` fork count (~60/Stop) is real but
    millisecond-scale — batch opportunistically, never urgently.
-6. **Sentinel visibility across a multi-entry turn — open design question** (issue #24;
-   2026-08-31 audit F03 residue): a done-claim in an EARLIER text entry of the turn is neutral
-   since v0.2.2 (no teardown, no count, no longer a counter reset), but it is still
-   invisible — a correct claim followed by a wrap-up sentence burns iterations to the
-   budget with zero feedback. The full fix is joining ALL the turn's text entries for
-   sentinel detection, but that reverses the test-locked v0.2.1 "later text entry wins"
-   decision (a claim the agent verbally walked back would then tear the loop down —
-   the expensive failure direction). Decide only with real-transcript evidence of how
-   often each shape occurs; the `#18` test block is where both directions are pinned.
+6. **~~Sentinel visibility across a multi-entry turn — open design question~~ — SETTLED
+   (issue #24, 2026-09-03): last-entry-wins STAYS.** Measured over 756 real sessions
+   (55,676 entries, 1,482 text-bearing turns): of turns claiming done, 85% have the claim
+   in the last text entry (hook sees it), 15% earlier (invisible); of the earlier-claim
+   turns, 70% are RETRACTED or qualified by later text, 30% neutral wrap-up. Joining all
+   entries would honor the 30% by tearing down on the 70% — the expensive direction.
+   Decision locked mechanically in the `#24` decision-lock block (`tests/test-hooks.sh`,
+   beside `#18`); flipping it means flipping both its assertions together. Decision
+   record: `docs/spec/stale-detection.md` appendix. Residue: `last_assistant_message`
+   now exists in Stop input (measured) — switching the scan to it someday must preserve
+   the `#18`/`#24` invariants.
 7. **Audit cuts still open** (from the 2026-08-16 max audit, verified but unfixed):
    the "keep/!update" garble lineage in repete-continue step 4 (fixed wording, watch
    regressions). The rest of that list shipped in v0.2.1: `set_fm` ENVIRON (#10),

@@ -50,7 +50,12 @@ Three safety yields also stop the autonomous run and hand control back:
   agent fails to write it the hook warns and rehydrate falls back to durable on-disk state
   (committed work, git, the loop body) — still clean, but uncommitted in-flight detail may be
   lost. This is the anti-context-rot mechanism. The budget counts raw transcript JSONL lines
-  (a loose proxy for context size, not tokens), default 2500.
+  (a loose proxy for context size, not tokens), default 2500. Measured 2026-09-03: the Stop
+  hook input carries **no token/context-usage field** (full field list pinned in
+  `tests/test-hooks.sh`'s `#24` block), so no better signal exists yet; and across 34 real
+  transcripts bytes-per-line varies 1.1–15.7 KB, so a byte budget would NOT be more
+  trustworthy — lines stay the proxy until the harness offers tokens. See
+  `docs/spec/stale-detection.md`'s `#15` note for the decision record.
 
 So: iterations run unattended; **you are only in the loop at transitions** — exactly where
 drift and bad decisions compound.

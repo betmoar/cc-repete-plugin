@@ -171,3 +171,46 @@ README version line. Ship on `feat/stale-detection`.
   in a single-pass shell hook; the v2 phased-missions roadmap is where decomposition
   lives. The /clear+rehydrate flow and the human at paused-* gates are the honest
   substitutes.
+
+---
+
+## Appendix (2026-09-03): issue #24 settled by measurement — last-entry-wins STAYS
+
+> **Refined-in-place decision record, not a rewrite of the sections above.** The
+> multi-entry-turn question flagged in the 2026-08-31 audit (F03 residue) is closed.
+
+Measurement over 756 local `.claude/projects` sessions (55,676 main-thread entries,
+1,482 text-bearing turns; boundary predicate identical to the hook's):
+
+- Turns containing a done-ish claim: **209**. Hook sees the claim in the last
+  text-bearing entry: **178 (85%)**. Claim sits in an earlier text entry: **31 (15%)**.
+- Multi-entry turns where an EARLIER entry claims and the last does not: **33**.
+  Later text **retracts or qualifies** the claim: **23 (70%)**. Later text is neutral
+  wrap-up: **10 (30%)**.
+
+**Decision:** joining all of a turn's text entries for sentinel detection would honor
+the 30% at the cost of tearing down on the 70% — a claim the agent verbally walked
+back would END the loop, the exact expensive direction v0.2.1 locked against. The
+15% invisible-claim loss is the accepted cost: it burns iterations to a budget (the
+cheap direction), a repeated mismatched claim still trips `paused-stale`, and every
+yield reaches the human. Both directions are now mechanically locked in the `#24`
+decision-lock block in `tests/test-hooks.sh`, adjacent to the `#18` block; flipping
+the trade requires flipping both assertions together.
+
+Also measured the same day (Stop hook input, live session, `claude 2.1.259`): the
+input carries `last_assistant_message` — the final assistant text of the turn,
+delivered by the harness — and **no token or context-usage field**. A future switch
+from transcript parsing to `last_assistant_message` must preserve the `#18`/`#24`
+invariants (turn-bounded scan, last-text-entry-wins, malformed-block tolerance).
+
+## Appendix (2026-09-03): issue #15 — lines stay the rot proxy
+
+> Decision record for the "line vs byte vs token" question.
+
+Measured: (a) Stop hook input has **no token/context signal** (field list above);
+(b) across 34 real transcripts, bytes-per-line spans **1.1–15.7 KB** — a
+file-reading loop's tool outputs are fat lines and a chatty loop's are thin, so a
+byte budget tracks the same noise, one power-of-ten larger. A byte budget is NOT
+more trustworthy; it just moves the arbitrary unit. Lines stay. Reopen only when
+the harness ships a tokens-ish field in Stop input (watch the field list pinned in
+the `#24` test block).
