@@ -61,6 +61,28 @@ Two kinds of code live here and they fail differently:
    branch — dead surface, issue #12), and a test locks it out of the early-exit case.
    Adding a status means updating: the hook's early-exit case, `/repete-status`'s "what to do
    next" map, and `/repete-continue`'s branch list.
+6. **What a loop PUBLISHES to sibling plugins** (issue #27) — two contracts this repo
+   emits without reading the consumers. Neither is a dependency; both are one-way
+   interfaces, invisible from inside this tree:
+   - **`.repete/loop.local.md` is a read API.** At minimum the path, the `active` key,
+     and the value form `active: true` — cc-reload's `repete_active()` greps exactly
+     that pattern (bare grep, whole file) and stands down on a hit. Renaming the key,
+     moving the file, or changing the value shape breaks a sibling SILENTLY: green
+     suite here, and cc-reload keeps running alongside a live loop — two plugins
+     fighting over the context budget, the exact outcome its stand-down prevents.
+     Locked by the `#27` test block, which greps from the consumer's side. Their
+     reader is looser than ours (matches body prose quoting `active: true`; our own
+     reads scope to the first frontmatter block — the C1 trap). That divergence is
+     theirs to fix; ours is to keep the first-block form stable.
+   - **Blocking `Stop` keeps `stop_hook_active` true for the session.** The hook never
+     reads that field (correct — a loop engine standing down on it would end after one
+     iteration), but a hook-forced continuation sets it on every subsequent `Stop`,
+     and OTHER plugins' Stop hooks receive it. cc-operator's Stop gate uses it as a
+     private loop guard and is silently disarmed for the whole window of an active
+     loop (betmoar/cc-operator-plugin#116). If you ever change when this hook blocks,
+     you are changing that reach.
+   If a third contract ever emerges (another file another plugin greps), document it
+   here and pin it the same way.
 
 ## Failure philosophy (the one rule)
 
@@ -141,6 +163,7 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments)                                                                                  | `card_field`'s comment-stripping                                                                                                                                                                                                                                                                                                                                                                                    | test: catalog block                                                                  |
 | `hooks/promote.sh` keys or behavior                                                                                                                 | `commands/repete-continue.md` step 4 invocation, `tests/test-promote.sh`, and the frontmatter-schema row above (promote writes 6 of those keys)                                                                                                                                                                                                                                                                     | test: `tests/test-promote.sh`                                                        |
 | A new test suite file under `tests/`                                                                                                                | `tests/run-all.sh` AND `.github/workflows/ci.yml` AND `.github/workflows/release.yml` — three sites, all by hand                                                                                                                                                                                                                                                                                                    | not enforced — a suite missing from CI passes locally and never runs on a tag        |
+| The state-file read API siblings grep for (path `.repete/loop.local.md`, key `active`, value form `true` in the FIRST frontmatter block)             | Nothing in-tree — but cc-reload's `repete_active()` greps it to stand down, so a rename/move/value-shape change breaks a sibling silently. Update core-load-bearing item 6 and notify the sibling repo. Do not "fix" the divergence by loosening our own reads — their bare grep matching body prose is their bug                                                                                            | test: `#27` contract blocks                                                              |
 | The scan jq program (`TURN_SCAN_JQ`)                                                                                                                | Nothing — it is defined ONCE and reused by all three paths (fast path, mktemp-failure fallback, growth loop). It was three verbatim copies; if you ever re-inline it, the paths can silently disagree                                                                                                                                                                                                               | tests: window-scan blocks + the `#18` blocks                                         |
 | Window sizing (`WINDOW_LINES`, `WINDOW_GROWTH`)                                                                                                     | Nothing mechanical — but the initial size must stay comfortably above the documented 500-sidechain hazard, and the growth predicate must stay "contains a turn boundary" (see landmine)                                                                                                                                                                                                                             | tests: window-scan blocks                                                            |
 | Transcript scan shape (`$turn_start`, text-bearing pick)                                                                                            | The #18 test block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, `tool_result`+text mixed, sidechain                                                                                                                                   | tests: `#18` blocks                                                                  |

@@ -667,6 +667,35 @@ ck "doc-lock: CLAUDE.md names the release gate" 'grep -q "release-gate" "$ROOT/C
 ck "doc-lock: CLAUDE.md names regen-golden"     'grep -q "regen-golden" "$ROOT/CLAUDE.md"'
 ck "doc-lock: golden test block points at regen-golden" 'grep -q "regen-golden" "$ROOT/tests/test-hooks.sh"'
 
+echo "== Issue #27: the state file is a published read API for sibling plugins =="
+# cc-reload's repete_active() greps .repete/loop.local.md for '^active:\s*true\s*$'
+# and stands down on a hit (its hooks/lib.sh) — so the path, the key, and the exact
+# value form are an interface this repo publishes without owning the reader. If any
+# of the three moves, the break is SILENT on this side (green suite here, cc-reload
+# runs alongside a live loop). These assertions pin the contract from the CONSUMER's
+# side — a bare grep over the file, exactly as the sibling reads it — so a rename
+# fails here instead of silently there. Consumer: cc-reload-plugin hooks/lib.sh;
+# cross-repo context: betmoar/cc-operator-plugin#116 (the stop_hook_active half).
+# The reader-shape divergence (their bare grep matches body prose; ours scopes to
+# the first frontmatter block) is THEIR bug to fix — this block pins only what both
+# readers agree on: the first-block form this repo must keep writing.
+CONTRACT_FM="$TMP/.repete/loop.local.md"
+scaffold ''
+ck "#27: consumer grep finds active:true in live state" \
+   'grep -qE "^active:[[:space:]]*true[[:space:]]*$" "$CONTRACT_FM"'
+# A teardown must leave the consumer grep COLD: run a done turn against the scaffold,
+# then re-check. Uses the hook's real write path (set_fm teardown), not a hand edit.
+mktx "<repete-done>all tests pass</repete-done>"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#27: teardown actually ran (active: false persisted)" \
+   'grep -qE "^active: false" "$CONTRACT_FM"'
+ck "#27: consumer grep is COLD on a torn-down loop (first block)" \
+   '! awk "BEGIN{f=0} /^---[[:space:]]*\$/{f++; next} f==1 && /^active:[[:space:]]*true[[:space:]]*\r?\$/{print \"y\"; exit} f>=2{exit}" "$CONTRACT_FM" | grep -q y'
+# The same scoped read must be the hook's own live-branch shape: the no-jq guard
+# reads active with first-block scoping, and the jq-era fm() must agree (C1).
+ck "#27: hook's own active read is first-block scoped (C1)" \
+   'grep -q "active:" "$H" && ! grep -qE "grep -q.*active.*loop.local.md" "$H"'
+
 
 echo "== No perl on PATH: hook degrades to raw-read (fail-open, loop survives) =="
 # Minimal PATH without perl; the state read must fall back to raw (BOM unstripped
