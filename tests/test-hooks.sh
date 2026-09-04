@@ -683,18 +683,35 @@ CONTRACT_FM="$TMP/.repete/loop.local.md"
 scaffold ''
 ck "#27: consumer grep finds active:true in live state" \
    'grep -qE "^active:[[:space:]]*true[[:space:]]*$" "$CONTRACT_FM"'
-# A teardown must leave the consumer grep COLD: run a done turn against the scaffold,
-# then re-check. Uses the hook's real write path (set_fm teardown), not a hand edit.
+# A teardown must leave the consumer's BARE grep COLD: run a done turn against the
+# scaffold, then re-check with the consumer's ACTUAL reader shape — a bare grep
+# over the whole file, not our scoped awk (the assertion label must not lie about
+# which reader is pinned). Uses the hook's real write path (set_fm teardown).
 mktx "<repete-done>all tests pass</repete-done>"
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "#27: teardown actually ran (active: false persisted)" \
    'grep -qE "^active: false" "$CONTRACT_FM"'
-ck "#27: consumer grep is COLD on a torn-down loop (first block)" \
-   '! awk "BEGIN{f=0} /^---[[:space:]]*\$/{f++; next} f==1 && /^active:[[:space:]]*true[[:space:]]*\r?\$/{print \"y\"; exit} f>=2{exit}" "$CONTRACT_FM" | grep -q y'
-# The same scoped read must be the hook's own live-branch shape: the no-jq guard
-# reads active with first-block scoping, and the jq-era fm() must agree (C1).
-ck "#27: hook's own active read is first-block scoped (C1)" \
-   'grep -q "active:" "$H" && ! grep -qE "grep -q.*active.*loop.local.md" "$H"'
+ck "#27: consumer's bare grep is COLD on a torn-down loop" \
+   '! grep -qE "^active:[[:space:]]*true[[:space:]]*$" "$CONTRACT_FM"'
+# RESIDUAL (their bug, documented): if the BODY later carries prose `active: true`
+# (loop payloads here quote their own schema), the consumer's bare grep stays HOT
+# forever after a teardown and they stay stood down. Our write path cannot control
+# the body; the fix is a scoped reader on their side. Do not "fix" it here by
+# loosening what we pin to match their reader.
+# The hook's OWN active read must be first-block scoped (C1) — pinned BEHAVIORALLY,
+# not by grepping hook source (a source grep is evaded by any regression that
+# spells the state file as $STATE_FILE): a partial-teardown state (active: false,
+# status: running) whose body quotes `active: true` must leave the jq-era hook
+# SILENT. An unscoped read re-enters the loop and emits a decision instead. Same
+# fixture shape as the #7 no-jq block; this one covers the fm()/jq path.
+# Failure direction: silent exit 0 = the decoy was correctly ignored.
+scaffold ""
+setstate active false
+printf 'the schema line looks like this:\nactive: true\n' >> "$CONTRACT_FM"
+mktx "did some work"
+C1OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}" \
+  | CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
+ck "#27: body decoy 'active: true' leaves the jq-era hook silent (C1)" '[ -z "$C1OUT" ]'
 
 
 echo "== No perl on PATH: hook degrades to raw-read (fail-open, loop survives) =="
@@ -981,7 +998,10 @@ echo "== #24: real-transcript evidence — last-entry-wins STAYS (decision locke
 # field list: background_tasks/cwd/effort/hook_event_name/last_assistant_message/
 # permission_mode/prompt_id/session_crons/session_id/stop_hook_active/transcript_path)
 # — a future switch to reading IT instead of the transcript must preserve BOTH
-# directions pinned below. The two assertions re-state the decision mechanically.
+# directions pinned below. The two assertions re-state the decision mechanically:
+# the MECHANISM is already #18's lock (same code path, `last // ""` selection);
+# this block's value is the measured record, the named 70/30 split, and the rule
+# that flipping the decision means flipping both assertions below together.
 
 echo "== #24: decision lock — a retraction AFTER a claim must not tear down =="
 # The 70% case from the measurement: claim, then later text walks it back. Join-all
@@ -1007,6 +1027,22 @@ mkrows "$(atext '<repete-done>all tests pass</repete-done>')" \
 OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
 ck "#24: wrap-up after claim -> no teardown (30% case)" 'grep -qE "^active: true" "$TMP/.repete/loop.local.md"'
 ck "#24: wrap-up after claim -> loop continues (block)"  'printf "%s" "$OUT" | jq -e ".decision==\"block\"" >/dev/null'
+
+echo "== #24: mitigation — a REPEATED claim on a later turn still tears down =="
+# The accepted 15% cost (invisible earlier claim) is mitigated because the loop is
+# not wedged: when the agent REPEATS the claim as the LAST entry of a LATER turn,
+# it is visible again and the teardown fires. Pins the mitigation sentence in the
+# decision comment above — an invisible claim must not somehow consume or ghost
+# the sentinel for the turns that follow.
+scaffold ""
+mkrows "$(atext '<repete-done>all tests pass</repete-done>')" \
+       "$(atext 'committing the branch now, summary follows in the report')" \
+       "$(atool)" \
+       "$(uprompt 'status?')" \
+       "$(atext '<repete-done>all tests pass</repete-done>')"
+OUT="$(run "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\"}")"
+ck "#24: repeated claim after an invisible one -> teardown" 'grep -qE "^status: done" "$TMP/.repete/loop.local.md"'
+ck "#24: repeated claim -> completion message" 'printf "%s" "$OUT" | jq -e ".systemMessage | test(\"mission goal met\")" >/dev/null'
 
 echo "== #18: no user row at all -> scan everything (pre-existing scope) =="
 scaffold ""
