@@ -48,7 +48,10 @@ fmv() { # key
         # fm(): "max_iterations: 5 " must render rp[i/5], not silently
         # uncapped (2026-08-31 audit F04); whitespace INSIDE quotes is content.
         sub(/[[:space:]]+$/, "")
-        sub(/^"/, ""); sub(/"$/, "")
+        # quotes strip as a BOTH-ENDS pair (#30): an asymmetric quote
+        # (active: true") is corruption, not formatting — it must read
+        # inactive, agreeing with fm() and the no-jq awk, never per-end.
+        if (/^"/ && /"$/) { sub(/^"/, ""); sub(/"$/, "") }
         print; exit
       }
       f>=2 { exit }
@@ -63,7 +66,10 @@ fmv() { # key
         # fm(): "max_iterations: 5 " must render rp[i/5], not silently
         # uncapped (2026-08-31 audit F04); whitespace INSIDE quotes is content.
         sub(/[[:space:]]+$/, "")
-        sub(/^"/, ""); sub(/"$/, "")
+        # quotes strip as a BOTH-ENDS pair (#30): an asymmetric quote
+        # (active: true") is corruption, not formatting — it must read
+        # inactive, agreeing with fm() and the no-jq awk, never per-end.
+        if (/^"/ && /"$/) { sub(/^"/, ""); sub(/"$/, "") }
         print; exit
       }
       f>=2 { exit }
