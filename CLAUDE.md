@@ -65,22 +65,28 @@ Two kinds of code live here and they fail differently:
    emits without reading the consumers. Neither is a dependency; both are one-way
    interfaces, invisible from inside this tree:
    - **`.repete/loop.local.md` is a read API.** At minimum the path, the `active` key,
-     and the value form `active: true` — cc-reload's `repete_active()` greps exactly
-     that pattern (bare grep, whole file) and stands down on a hit. Renaming the key,
-     moving the file, or changing the value shape breaks a sibling SILENTLY: green
-     suite here, and cc-reload keeps running alongside a live loop — two plugins
-     fighting over the context budget, the exact outcome its stand-down prevents.
-     Locked by the `#27` test block, which greps from the consumer's side. Their
-     reader is looser than ours (matches body prose quoting `active: true`; our own
-     reads scope to the first frontmatter block — the C1 trap). That divergence is
-     theirs to fix; ours is to keep the first-block form stable.
+     and the value form `active: true` — cc-reload's `repete_active()` reads exactly
+     that pattern and stands down on a hit. Renaming the key, moving the file, or
+     changing the value shape breaks a sibling SILENTLY: green suite here, and
+     cc-reload keeps running alongside a live loop — two plugins fighting over the
+     context budget, the exact outcome its stand-down prevents. Locked by the `#27`
+     test block, which greps from the consumer's side. **Known divergent consumer
+     (#29): cc-reload v0.4.0's reader is first-block scoped but tolerates a quote on
+     either end independently, so an asymmetric `active: true"` reads ACTIVE there and
+     INACTIVE here (canonical: `fm()`, both-quotes-or-neither — #30). No writer emits
+     that form, so it takes a hand edit or torn write; consumers must stay
+     conservative. Their reader, their fix — ours is to keep the first-block
+     `active: true` form stable and never loosen our reads to match.**
    - **Blocking `Stop` keeps `stop_hook_active` true for the session.** The hook never
      reads that field (correct — a loop engine standing down on it would end after one
      iteration), but a hook-forced continuation sets it on every subsequent `Stop`,
      and OTHER plugins' Stop hooks receive it. cc-operator's Stop gate uses it as a
      private loop guard and is silently disarmed for the whole window of an active
-     loop (betmoar/cc-operator-plugin#116). If you ever change when this hook blocks,
-     you are changing that reach.
+     loop (betmoar/cc-operator-plugin#116). Whether the flag stays up for the whole
+     loop window (including allow-through turns like checkpoint yields) or only for
+     Stops immediately following a block is UNMEASURED from here — consumers must
+     treat it as set-for-the-whole-window (the conservative reading) until measured.
+     If you ever change when this hook blocks, you are changing that reach.
    If a third contract ever emerges (another file another plugin greps), document it
    here and pin it the same way.
 
@@ -153,7 +159,7 @@ If you add a check, decide its failure direction first and write it in a comment
 | `templates/lesson-card.md` frontmatter (incl. inline `#` comments) | `card_field`'s comment-stripping | test: catalog block |
 | `hooks/promote.sh` keys or behavior | `commands/repete-continue.md` step 4 invocation, `tests/test-promote.sh`, frontmatter-schema row (promote writes 6 keys) | test: `tests/test-promote.sh` |
 | A new test suite file under `tests/` | `tests/run-all.sh` AND `.github/workflows/ci.yml` AND `.github/workflows/release.yml` — three sites, by hand | not enforced — a suite missing from CI never runs on a tag |
-| The state-file read API siblings grep for (path `.repete/loop.local.md`, key `active`, value `true` in the FIRST frontmatter block) | Nothing in-tree — but cc-reload's `repete_active()` greps it to stand down, so a rename/move/value-shape change breaks a sibling silently. Update core item 6 and notify the sibling repo. Do not "fix" the divergence by loosening our reads — their bare grep matching body prose is their bug | test: `#27` blocks |
+| The state-file read API siblings grep for (path `.repete/loop.local.md`, key `active`, value `true` in the FIRST frontmatter block) | Nothing in-tree — but cc-reload's `repete_active()` reads it to stand down, so a rename/move/value-shape change breaks a sibling silently. Update core item 6 and notify the sibling repo. Do not "fix" the divergence by loosening our reads — cc-reload v0.4.0 is first-block scoped but quote-tolerant per end (asymmetric `true"` diverges, #29/#30); their reader, their fix | tests: `#27` + `#30` blocks |
 | The scan jq program (`TURN_SCAN_JQ`) | Nothing — defined ONCE, reused by all three paths (fast path, mktemp fallback, growth loop). It was three verbatim copies; re-inlining lets the paths silently disagree | tests: window-scan + `#18` |
 | Window sizing (`WINDOW_LINES`, `WINDOW_GROWTH`) | Nothing mechanical — initial size stays above the documented 500-sidechain hazard; growth predicate stays "contains a turn boundary" (see landmine) | tests: window-scan blocks |
 | Transcript scan shape (`$turn_start`, text-bearing pick) | The `#18` block — both directions (sentinel behind a tool tail IS seen; a spent sentinel from a previous turn is NOT) AND every observed user-row shape that decides the boundary: bare `tool_result`, plain string, `text`, `image+text`, mixed `tool_result`+text, sidechain. PLUS the `#24` decision-lock (retraction/wrap-up after a claim → no teardown — the measured 70/30 split) and the Stop-input field list (incl. `last_assistant_message`, no token field) | tests: `#18` + `#24` blocks |

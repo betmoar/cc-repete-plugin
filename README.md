@@ -8,10 +8,10 @@ that **evolves its own payload** at each human-gated checkpoint (or runs unatten
 `/clear` + rehydrate checkpoint. Opt-in layers let it **harvest out-of-scope discoveries**
 as the seed for the next loop and **learn from its mistakes** into a project lesson library —
 both off by default so a bare loop stays quiet. It reuses the
-[`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
+[`remember`](https://github.com/Digital-Process-Tools/claude-remember) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.2.4** — a single evolving loop with opt-in autonomous mode, opt-in project-local
+This is **v0.2.5** — a single evolving loop with opt-in autonomous mode, opt-in project-local
 lessons, mismatch-feedback on done-claims, and opt-in gauntlet (builder/critic) rounds.
 Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
 same state model.

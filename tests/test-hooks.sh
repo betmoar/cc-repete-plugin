@@ -668,17 +668,19 @@ ck "doc-lock: CLAUDE.md names regen-golden"     'grep -q "regen-golden" "$ROOT/C
 ck "doc-lock: golden test block points at regen-golden" 'grep -q "regen-golden" "$ROOT/tests/test-hooks.sh"'
 
 echo "== Issue #27: the state file is a published read API for sibling plugins =="
-# cc-reload's repete_active() greps .repete/loop.local.md for '^active:\s*true\s*$'
-# and stands down on a hit (its hooks/lib.sh) — so the path, the key, and the exact
-# value form are an interface this repo publishes without owning the reader. If any
-# of the three moves, the break is SILENT on this side (green suite here, cc-reload
-# runs alongside a live loop). These assertions pin the contract from the CONSUMER's
-# side — a bare grep over the file, exactly as the sibling reads it — so a rename
-# fails here instead of silently there. Consumer: cc-reload-plugin hooks/lib.sh;
-# cross-repo context: betmoar/cc-operator-plugin#116 (the stop_hook_active half).
-# The reader-shape divergence (their bare grep matches body prose; ours scopes to
-# the first frontmatter block) is THEIR bug to fix — this block pins only what both
-# readers agree on: the first-block form this repo must keep writing.
+# cc-reload's repete_active() reads .repete/loop.local.md's first frontmatter
+# block for an active: true line and stands down on a hit (its hooks/lib.sh) —
+# so the path, the key, and the exact value form are an interface this repo
+# publishes without owning the reader. If any of the three moves, the break is
+# SILENT on this side (green suite here, cc-reload runs alongside a live loop).
+# These assertions pin the contract from the CONSUMER's side. Consumer shape
+# note (#29): cc-reload v0.4.0's reader is first-block scoped (it adopted our
+# C1 form) but tolerates a quote on either end independently — its "?true"?.
+# The bare-grep assertions below still pin it only because the new reader is a
+# strict subset of the old grep's hits; the asymmetric-quote divergence that
+# remains is pinned by the #30 agreement probes above. Consumer:
+# cc-reload-plugin hooks/lib.sh; cross-repo context:
+# betmoar/cc-operator-plugin#116 (the stop_hook_active half).
 CONTRACT_FM="$TMP/.repete/loop.local.md"
 scaffold ''
 ck "#27: consumer grep finds active:true in live state" \
@@ -713,6 +715,32 @@ C1OUT="$(printf '%s' "{\"transcript_path\":\"$TMP/t.jsonl\",\"session_id\":\"S1\
   | CLAUDE_PROJECT_DIR="$TMP" CLAUDE_PLUGIN_ROOT="$ROOT" bash "$H" 2>/dev/null)"
 ck "#27: body decoy 'active: true' leaves the jq-era hook silent (C1)" '[ -z "$C1OUT" ]'
 
+# Reader-agreement pin (#30): the repo has TWO active readers — the jq-era
+# fm() (grep|head|sed chain) and the no-jq awk fallback — plus a third in the
+# statusline fmv(). They disagreed on an ASYMMETRIC quote (active: true"):
+# fm() strips quotes only as a both-ends pair (reads inactive), the awk's
+# independent "?quantifiers matched (reads ACTIVE). Canonical is fm():
+# corruption is likelier than formatting, and a hand-edited value must not
+# resurrect a loop its own engine exited. Every reader must agree with it on
+# every value form — including the malformed ones nobody writes.
+# Reader probes, kept verbatim against drift: FM_ACTIVE models fm()'s chain;
+# AWK_ACTIVE models the hook's no-jq line; fm()'s own input needs the
+# tr -d '\r' the hook applies before defining fm() (see FM= below).
+fm_probe(){ # value-form -> "true" iff fm()'s chain reads active
+  printf '%s\n' "$1" | tr -d '\r' | grep '^active:' | head -1 \
+    | sed -e 's/^active:[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    | sed 's/^"\(.*\)"$/\1/'
+}
+awk_probe(){ # value-form -> "y" iff the no-jq awk reads active
+  printf -- '---\n%s\n---\n' "$1" | awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next}
+    f==1 && /^active:[[:space:]]*(true|\"true\")[[:space:]]*\r?$/{print "y"; exit}
+    f>=2{exit}'
+}
+for FORM in 'active: true' 'active: "true"' 'active: true ' 'active: true"' 'active: "true'; do
+  FM_V="$(fm_probe "$FORM")"; AWK_V="$(awk_probe "$FORM")"
+  ck "#30: fm() and no-jq awk agree on [$FORM]" \
+     '[ "$FM_V" = true ] && [ "$AWK_V" = y ] || { [ "$FM_V" != true ] && [ "$AWK_V" != y ]; }'
+done
 
 echo "== No perl on PATH: hook degrades to raw-read (fail-open, loop survives) =="
 # Minimal PATH without perl; the state read must fall back to raw (BOM unstripped

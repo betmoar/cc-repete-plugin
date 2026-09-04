@@ -4,6 +4,14 @@ All notable changes to cc-repete are recorded here. Versions follow [semver](htt
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-09-04
+
+### Fixed
+- **All three `active:` readers now agree on an asymmetric quote** (issue #30, found while fixing cc-reload-plugin#12). The repo has three readers of the state file's `active` key: the canonical `fm()` (jq-era), the no-jq awk fallback, and the statusline's `fmv()`. `fm()` strips surrounding quotes only as a both-ends pair, so `active: true"` read INACTIVE; the awk's `"?…"?` quantifiers matched either end independently, and `fmv()` used per-end `sub()` calls — both read ACTIVE. No writer emits the asymmetric form (it takes a hand edit or a torn write), but cc-reload v0.4.0 mirrors the tolerant shape, so the sibling's stand-down disagreed with this repo's own engine on that one input. Canonical ruling: `fm()` wins — an asymmetric quote is likelier corruption than formatting, and a hand-edit must not resurrect a loop its own engine exited. The no-jq awk and `fmv()` (both branches) now strip quotes both-ends-or-neither; new `#30` reader-agreement probes run five value forms through `fm()` and the awk and assert they agree (red on the pre-fix code), and the statusline pins both asymmetric forms to an empty segment. The `#27` block's consumer comment now documents cc-reload v0.4.0's actual reader (first-block scoped, quote-tolerant per end) instead of the pre-0.4.0 bare grep, and names the remaining divergence as theirs to fix.
+
+### Changed
+- **The contracts section now names the known divergent consumer and bounds the `stop_hook_active` claim** (issue #29, from the cc-operator seam-mapping). CLAUDE.md core item 6 states that cc-reload v0.4.0's reader is first-block scoped but tolerates a quote on either end independently — so consumers are told to stay conservative on malformed value forms — and declares that whether `stop_hook_active` stays up for the whole loop window (including allow-through turns) or only after a block is UNMEASURED from this repo: consumers must read it as set-for-the-whole-window until measured. The couplings row follows suit (`#27` + `#30` test blocks). Doc-only; no hook behavior changed beyond the reader alignment above.
+
 ## [0.2.4] — 2026-09-04
 
 ### Changed

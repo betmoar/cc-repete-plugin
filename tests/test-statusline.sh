@@ -94,6 +94,17 @@ perl -i -pe 's/^active: true/active: "true"/; s/^iteration: 3/iteration: "3"/; s
 OUT="$(run)"
 ck "quoted active/iter/max still render rp[3/10]" '[ "$OUT" = "rp[3/10]" ]'
 
+echo "== #30: asymmetric quote reads INACTIVE — parity with fm(), not per-end strips =="
+# fmv() used sub(/^"/) + sub(/"$/) independently, so active: true" (and "true)
+# rendered as a live segment while the hook's fm() had exited the loop. Quotes
+# must strip as a both-ends pair, matching fm() and the no-jq awk (#30).
+for V in 'true"' '"true'; do
+  mkstate true 3 10
+  perl -i -pe "s/^active: true/active: $V/" "$TMP/.repete/loop.local.md"
+  OUT="$(run 2>/dev/null)"
+  ck "#30: active: $V renders nothing (agrees with fm())" '[ -z "$OUT" ]'
+done
+
 echo "== Status differentiation: paused renders distinct from running (audit F14) =="
 mkstate true 3 10
 for st in paused-checkpoint paused-context paused-max paused-stale; do

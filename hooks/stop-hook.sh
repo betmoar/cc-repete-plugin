@@ -43,8 +43,14 @@ if ! command -v jq >/dev/null 2>&1; then
   # bare grep also matches a body line like "active: true" (loop prose quoting the
   # schema), which would warn about a finished loop. awk, because the real reader
   # is not available yet — fm() is defined below and needs the jq-era helpers.
+  # Quote rule mirrors fm() (#30): BOTH ends or NEITHER — an asymmetric quote
+  # (active: true") is corruption, not formatting, and must read INACTIVE here
+  # exactly as it does in fm(). The old "?…"? quantifiers matched either end
+  # independently, so this fallback called a corrupted loop active when the
+  # canonical reader had already exited it. Failure direction: toward inactive —
+  # consistent with fm(), and the no-jq branch only decides whether to WARN.
   NOJQ_ACTIVE="$(awk 'BEGIN{f=0} /^---[[:space:]]*$/{f++; next}
-                      f==1 && /^active:[[:space:]]*"?true"?[[:space:]]*\r?$/{print "y"; exit}
+                      f==1 && /^active:[[:space:]]*(true|\"true\")[[:space:]]*\r?$/{print "y"; exit}
                       f>=2{exit}' "$STATE_FILE" 2>/dev/null)"
   if [[ "$NOJQ_ACTIVE" == "y" && ! -f "$NOJQ_MARKER" ]]; then
     : > "$NOJQ_MARKER" 2>/dev/null
