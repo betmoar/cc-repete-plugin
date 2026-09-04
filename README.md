@@ -11,7 +11,7 @@ both off by default so a bare loop stays quiet. It reuses the
 [`remember`](https://github.com/betmoar/cc-remember-plugin) plugin for tiered memory rather than
 reinventing it.
 
-This is **v0.2.3** — a single evolving loop with opt-in autonomous mode, opt-in project-local
+This is **v0.2.4** — a single evolving loop with opt-in autonomous mode, opt-in project-local
 lessons, mismatch-feedback on done-claims, and opt-in gauntlet (builder/critic) rounds.
 Multi-phase mission chaining (v2) and cross-project global learning (v3) build on the
 same state model.
@@ -50,7 +50,12 @@ Three safety yields also stop the autonomous run and hand control back:
   agent fails to write it the hook warns and rehydrate falls back to durable on-disk state
   (committed work, git, the loop body) — still clean, but uncommitted in-flight detail may be
   lost. This is the anti-context-rot mechanism. The budget counts raw transcript JSONL lines
-  (a loose proxy for context size, not tokens), default 2500.
+  (a loose proxy for context size, not tokens), default 2500. Measured 2026-09-03: the Stop
+  hook input carries **no token/context-usage field** (full field list pinned in
+  `tests/test-hooks.sh`'s `#24` block), so no better signal exists yet; and across 34 real
+  transcripts bytes-per-line varies 1.1–15.7 KB, so a byte budget would NOT be more
+  trustworthy — lines stay the proxy until the harness offers tokens. See
+  `docs/spec/stale-detection.md`'s `#15` note for the decision record.
 
 So: iterations run unattended; **you are only in the loop at transitions** — exactly where
 drift and bad decisions compound.
@@ -169,7 +174,8 @@ constitution, and the frozen protocol, keeping each iteration quiet:
 When `lessons_enabled` is on and the agent hits a dead-end or a fix that didn't work, it writes a
 **lesson card** to `.repete/lessons/` (see `templates/lesson-card.md`): situation → tried →
 outcome → rule, tagged for retrieval. Cards are project-local in v1; recurrence-gated promotion to
-a global `~/.claude/repete/` store is the v3 design. Likewise `todo_next_enabled` turns on the
+a global `~/.config/cc-repete/lessons/` store is the v3 design
+(`docs/spec/global-lesson-store.md`). Likewise `todo_next_enabled` turns on the
 "log out-of-scope finds to `todo-next.md`" rule. Both are off by default.
 
 ## Requirements
@@ -206,5 +212,6 @@ the full test suite, and publishes the CHANGELOG section as the release body.
 ## Roadmap
 
 - **v2** — mission as N named phases; `transition.md` advances a declared phase plan.
-- **v3** — cross-project lessons in `~/.claude/repete/`, recurrence-gated promotion, a
-  consolidation pass (dedup/generalize/age-out) to keep the library retrieval-sharp.
+- **v3** — cross-project lessons in `~/.config/cc-repete/lessons/`, recurrence-gated
+  promotion (a lesson promoted only after N distinct projects hit it), local cards win
+  on collision — design in `docs/spec/global-lesson-store.md`.
